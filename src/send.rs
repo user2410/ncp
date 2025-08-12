@@ -2,6 +2,7 @@ use crate::proto::*;
 use prost::Message;
 use crate::framing::{read_message, write_message, write_exact_bytes};
 use crate::checksum::calculate_file_checksum;
+use crate::directory::{walk_directory, calculate_total_size};
 use crate::{ChecksumMode, OverwriteMode, vlog};
 use crate::types::Result;
 
@@ -24,16 +25,15 @@ pub fn execute(
         return Err(format!("Source path does not exist: {}", src.display()).into());
     }
 
-    if src.is_dir() {
-        return Err("Directory transfer not implemented in minimal version".into());
-    }
+    let is_directory = src.is_dir();
+    vlog!(2, "Source is {}: {:?}", if is_directory { "directory" } else { "file" }, src);
 
     let mut last_error = None;
     
     for attempt in 1..=retries {
         println!("Attempt {}/{}", attempt, retries);
         
-        match attempt_transfer(&host, port, &src, &checksum_mode, &overwrite_mode) {
+        match attempt_transfer(&host, port, &src, &checksum_mode, &overwrite_mode, is_directory) {
             Ok(()) => {
                 println!("Transfer completed successfully");
                 return Ok(());
@@ -63,6 +63,7 @@ fn attempt_transfer(
     src_path: &Path,
     checksum_mode: &ChecksumMode,
     _overwrite_mode: &OverwriteMode,
+    is_directory: bool,
 ) -> Result<()> {
     println!("Connecting to {}:{}...", host, port);
     vlog!(2, "Attempting TCP connection to {}:{}", host, port);
@@ -98,7 +99,6 @@ fn attempt_transfer(
 
     // Calculate checksum if enabled
     let checksum = if matches!(checksum_mode, ChecksumMode::Hash) {
-        println!("Calculating checksum...");
         vlog!(2, "Calculating checksum for file: {:?}", src_path);
         let checksum = calculate_file_checksum(src_path)?;
         vlog!(2, "Checksum calculated: {} bytes", checksum.len());
@@ -137,7 +137,7 @@ fn attempt_transfer(
         
         // Try to decode as PreflightOk first
         if let Ok(_) = PreflightOk::decode(&buffer[..]) {
-            println!("Preflight check passed");
+            vlog!(1, "Preflight check passed");
             break;
         }
         
@@ -164,7 +164,7 @@ fn attempt_transfer(
     let mut buffer = [0u8; 8192];
     let mut total_sent = 0u64;
 
-    println!("Sending file data...");
+    vlog!(1, "Sending file data...");
     vlog!(2, "Starting file data transfer: {} bytes", file_size);
     
     loop {
@@ -192,9 +192,9 @@ fn attempt_transfer(
     let transfer_result: TransferResult = read_message(&mut stream)?;
     
     if transfer_result.ok {
-        println!("Transfer successful!");
+        vlog!(1, "Transfer successful!");
         if transfer_result.received_bytes != file_size {
-            println!("Warning: Received bytes ({}) != sent bytes ({})", 
+            vlog!(2, "Warning: Received bytes ({}) != sent bytes ({})", 
                      transfer_result.received_bytes, file_size);
         }
     } else {

@@ -4,6 +4,7 @@ use std::process;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 mod checksum;
+mod directory;
 mod diskspace;
 mod framing;
 mod proto;
