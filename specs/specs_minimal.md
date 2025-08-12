@@ -34,6 +34,9 @@ ncp send --host 127.0.0.1 --port 9000 ./my_folder
 
 # With retries and checksum
 ncp send --host 127.0.0.1 --port 9000 --retries 5 --checksum hash ./data.bin
+
+# With verbose output (debug level)
+ncp send -vv --host 127.0.0.1 --port 9000 ./data.bin
 ```
 
 ## CLI Syntax
@@ -49,6 +52,7 @@ ncp send [options] --host {host} --port {port} {src}
 ## CLI Options
 
 ### Common
+- `-v, --verbose` (increase verbosity: -v info, -vv debug, -vvv trace)
 - `--retries N` (default: 3)
 - `--checksum [hash|none]` (default: hash)
 - `--overwrite [ask|yes|no]` (default: ask)
@@ -139,7 +143,6 @@ ncp/
 - TLS/encryption
 - Async I/O
 - Resume/chunking
-- Verbose logging
 - Configuration files
 - Timeouts
 - Rate limiting

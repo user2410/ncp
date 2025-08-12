@@ -4,3 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Protobuf support
+prost = "0.14"
+prost-types = "0.14"
+# CLI parsing
+clap = { version = "4.5", features = ["derive"] }
+
+[build-dependencies]
+prost-build = "0.14"
