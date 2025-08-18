@@ -11,8 +11,7 @@ mod proto;
 mod recv;
 mod send;
 mod types;
-mod logging;
-
+mod hostname;
 
 // Global verbosity level
 static VERBOSITY: AtomicU8 = AtomicU8::new(0);
@@ -36,7 +35,7 @@ pub(crate) use vlog;
 #[derive(Parser)]
 #[command(name = "ncp")]
 #[command(about = "Minimal file transfer over TCP")]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     /// Increase verbosity (-v info, -vv debug, -vvv trace)
     #[arg(short, long, action = clap::ArgAction::Count)]

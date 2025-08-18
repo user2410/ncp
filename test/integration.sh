@@ -55,7 +55,55 @@ else
     exit 1
 fi
 
-echo "=== Test 2: Large file transfer ==="
+echo "=== Test 2: Recursive directory transfer ==="
+echo "Creating test directory structure..."
+mkdir -p test_files/test_dir/subdir
+echo "file1 content" > test_files/test_dir/file1.txt
+echo "file2 content" > test_files/test_dir/subdir/file2.txt
+echo "file3 content" > test_files/test_dir/file3.txt
+
+echo "Starting receiver for directory transfer..."
+timeout 30 ./target/release/ncp recv --port 9005 --overwrite yes received_files/ &
+RECV_PID=$!
+
+sleep 1
+
+echo "Sending directory..."
+./target/release/ncp send --host 127.0.0.1 --port 9005 test_files/test_dir
+
+sleep 1
+kill $RECV_PID 2>/dev/null || true
+wait $RECV_PID 2>/dev/null || true
+
+echo "Verifying directory transfer..."
+echo "Contents of received_files/:"
+ls -la received_files/
+
+if [ -f "received_files/file1.txt" ] && [ -f "received_files/file3.txt" ]; then
+    echo "✓ Root files transferred"
+else
+    echo "✗ Root files missing"
+    exit 1
+fi
+
+if [ -d "received_files/subdir" ] && [ -f "received_files/subdir/file2.txt" ]; then
+    echo "✓ Subdirectory and files transferred"
+else
+    echo "✗ Subdirectory or files missing"
+    exit 1
+fi
+
+if cmp -s "test_files/test_dir/file1.txt" "received_files/file1.txt"; then
+    echo "✓ File contents match"
+else
+    echo "✗ File contents differ"
+    exit 1
+fi
+
+echo "✓ Directory structure transferred successfully"
+
+
+echo "=== Test 3: Large file transfer ==="
 echo "Starting receiver for large file..."
 timeout 30 ./target/release/ncp recv --port 9002 received_files/ &
 RECV_PID=$!
@@ -86,11 +134,11 @@ else
     exit 1
 fi
 
-echo "=== Test 3: Disk space unit tests ==="
+echo "=== Test 4: Disk space unit tests ==="
 echo "Testing disk space functions..."
 cargo test diskspace
 
-echo "=== Test 4: Overwrite behavior ==="
+echo "=== Test 5: Overwrite behavior ==="
 echo "Testing overwrite with --overwrite yes..."
 echo "Starting receiver with overwrite=yes..."
 timeout 20 ./target/release/ncp recv --port 9003 --overwrite yes received_files/test_overwrite.txt &
@@ -119,6 +167,7 @@ rm -rf test_files received_files
 echo ""
 echo "🎉 All tests passed!"
 echo "✓ Basic file transfer"
+echo "✓ Directory transfer"
 echo "✓ Large file transfer" 
 echo "✓ Disk space checking"
 echo "✓ Overwrite handling"

@@ -1,3 +1,4 @@
+use crate::hostname::get_hostname;
 use crate::proto::*;
 use prost::Message;
 use crate::framing::{read_message, write_message, write_exact_bytes};
@@ -68,7 +69,7 @@ fn attempt_transfer(
     println!("Connecting to {}:{}...", host, port);
     vlog!(2, "Attempting TCP connection to {}:{}", host, port);
     let mut stream = TcpStream::connect((host, port))?;
-    vlog!(2, "TCP connection established");
+    println!("TCP connection established");
     
     // Generate session ID
     let session_id = format!("session_{}", std::process::id());
@@ -76,8 +77,8 @@ fn attempt_transfer(
     // Send Probe message
     let probe = Probe::new(
         session_id.clone(),
-        "0.1.0".to_string(),
-        "ncp-minimal".to_string(),
+        env!("CARGO_PKG_VERSION").to_string(),
+        get_hostname(),
     );
     vlog!(2, "Sending Probe message with session_id: {}", session_id);
     write_message(&mut stream, &probe)?;
@@ -90,6 +91,69 @@ fn attempt_transfer(
     println!("Connection established");
     vlog!(2, "Connection established with session_id: {}", session_id);
 
+    if is_directory {
+        transfer_directory(&mut stream, &session_id, src_path, checksum_mode)?;
+    } else {
+        transfer_single_file(&mut stream, &session_id, src_path, checksum_mode)?;
+    }
+
+    Ok(())
+}
+
+fn transfer_directory(
+    stream: &mut TcpStream,
+    session_id: &str,
+    src_path: &Path,
+    checksum_mode: &ChecksumMode,
+) -> Result<()> {
+    // Walk directory to get all entries
+    let entries = walk_directory(src_path)?;
+    let total_size = calculate_total_size(&entries);
+    
+    vlog!(1, "Directory contains {} entries, total size: {} bytes", entries.len(), total_size);
+    
+    // Send each entry (directories first, then files)
+    for entry in entries {
+        vlog!(2, "Transferring {}: {:?}", if entry.is_dir { "directory" } else { "file" }, entry.relative_path);
+        
+        let file_name = entry.relative_path.to_string_lossy().to_string();
+        let checksum = if !entry.is_dir && matches!(checksum_mode, ChecksumMode::Hash) {
+            vlog!(2, "Calculating checksum for: {:?}", entry.path);
+            calculate_file_checksum(&entry.path)?
+        } else {
+            vec![]
+        };
+        
+        // Create and send Meta message
+        let mut file_meta = FileMeta::new(file_name, entry.size, entry.is_dir);
+        file_meta.checksum = checksum;
+        file_meta.checksum_alg = if matches!(checksum_mode, ChecksumMode::Hash) {
+            "defaulthash".to_string()
+        } else {
+            "none".to_string()
+        };
+        
+        let meta = Meta::new(session_id.to_string(), file_meta);
+        write_message(stream, &meta)?;
+        
+        // Wait for preflight response
+        wait_for_preflight(stream)?;
+        
+        if !entry.is_dir {
+            // Send file data
+            transfer_file_data(stream, session_id, &entry.path, entry.size)?;
+        }
+    }
+    
+    Ok(())
+}
+
+fn transfer_single_file(
+    stream: &mut TcpStream,
+    session_id: &str,
+    src_path: &Path,
+    checksum_mode: &ChecksumMode,
+) -> Result<()> {
     // Get file metadata
     let file_size = std::fs::metadata(src_path)?.len();
     let file_name = src_path.file_name()
@@ -117,12 +181,20 @@ fn attempt_transfer(
         "none".to_string()
     };
 
-    let meta = Meta::new(session_id.clone(), file_meta);
-    write_message(&mut stream, &meta)?;
+    let meta = Meta::new(session_id.to_string(), file_meta);
+    write_message(stream, &meta)?;
 
     // Wait for preflight response
+    wait_for_preflight(stream)?;
+    
+    // Send file data
+    transfer_file_data(stream, session_id, src_path, file_size)?;
+    
+    Ok(())
+}
+
+fn wait_for_preflight(stream: &mut TcpStream) -> Result<()> {
     loop {
-        // Try to read different message types
         let mut buffer = Vec::new();
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf)?;
@@ -135,13 +207,11 @@ fn attempt_transfer(
         buffer.resize(len as usize, 0);
         stream.read_exact(&mut buffer)?;
         
-        // Try to decode as PreflightOk first
         if let Ok(_) = PreflightOk::decode(&buffer[..]) {
-            vlog!(1, "Preflight check passed");
-            break;
+            vlog!(2, "Preflight check passed");
+            return Ok(());
         }
         
-        // Try to decode as PreflightFail
         if let Ok(preflight_fail) = PreflightFail::decode(&buffer[..]) {
             let error_msg = if preflight_fail.reason.is_empty() {
                 format!("Preflight failed with code: {}", preflight_fail.code)
@@ -153,18 +223,24 @@ fn attempt_transfer(
         
         return Err("Unexpected response to Meta message".into());
     }
+}
 
+fn transfer_file_data(
+    stream: &mut TcpStream,
+    session_id: &str,
+    file_path: &Path,
+    file_size: u64,
+) -> Result<()> {
     // Send TransferStart message
-    let transfer_start = TransferStart::new(session_id.clone(), file_size);
-    write_message(&mut stream, &transfer_start)?;
+    let transfer_start = TransferStart::new(session_id.to_string(), file_size);
+    write_message(stream, &transfer_start)?;
 
     // Open source file and start streaming
-    let file = File::open(src_path)?;
+    let file = File::open(file_path)?;
     let mut reader = BufReader::new(file);
     let mut buffer = [0u8; 8192];
     let mut total_sent = 0u64;
 
-    vlog!(1, "Sending file data...");
     vlog!(2, "Starting file data transfer: {} bytes", file_size);
     
     loop {
@@ -173,30 +249,25 @@ fn attempt_transfer(
             break;
         }
         
-        write_exact_bytes(&mut stream, &buffer[..bytes_read])?;
+        write_exact_bytes(stream, &buffer[..bytes_read])?;
         total_sent += bytes_read as u64;
         
-        // Simple progress indicator
         if total_sent % (1024 * 1024) == 0 || total_sent == file_size {
             print!("\rSent: {}/{} bytes", total_sent, file_size);
             stdout().flush().unwrap();
         }
     }
-    println!(); // New line after progress
+    println!();
 
     if total_sent != file_size {
         return Err(format!("File size mismatch: sent {} bytes, expected {}", total_sent, file_size).into());
     }
 
     // Wait for TransferResult
-    let transfer_result: TransferResult = read_message(&mut stream)?;
+    let transfer_result: TransferResult = read_message(stream)?;
     
     if transfer_result.ok {
-        vlog!(1, "Transfer successful!");
-        if transfer_result.received_bytes != file_size {
-            vlog!(2, "Warning: Received bytes ({}) != sent bytes ({})", 
-                     transfer_result.received_bytes, file_size);
-        }
+        vlog!(2, "File transfer successful: {} bytes", transfer_result.received_bytes);
     } else {
         let error_msg = if transfer_result.reason.is_empty() {
             format!("Transfer failed with code: {}", transfer_result.code)

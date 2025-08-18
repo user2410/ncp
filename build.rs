@@ -1,9 +1,13 @@
-// Manual protobuf compilation script
-// Run with: cargo run --bin build
-
+use std::env;
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Tell cargo to recompile if Cargo.toml changes
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    
+    // Export the package version from Cargo.toml
+    println!("cargo:rustc-env=CARGO_PKG_VERSION={}", env!("CARGO_PKG_VERSION"));
+    
     // Ensure output directory exists
     let out_dir = "src/generated";
     fs::create_dir_all(out_dir)?;

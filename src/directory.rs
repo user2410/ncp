@@ -47,7 +47,7 @@ fn walk_recursive(root: &Path, current: &Path, entries: &mut Vec<FileEntry>) -> 
             size: 0,
         });
         
-        vlog!(3, "Directory: {:?}", relative_path);
+        vlog!(2, "Directory: {:?}", relative_path);
         
         // Recursively process directory contents
         let dir_entries = fs::read_dir(current)?;
@@ -64,7 +64,7 @@ fn walk_recursive(root: &Path, current: &Path, entries: &mut Vec<FileEntry>) -> 
             size: metadata.len(),
         });
         
-        vlog!(3, "File: {:?} ({} bytes)", current, metadata.len());
+        vlog!(2, "File: {:?} ({} bytes)", current, metadata.len());
     }
     
     Ok(())
