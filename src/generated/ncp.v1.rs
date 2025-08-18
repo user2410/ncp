@@ -103,13 +103,6 @@ pub struct TransferResult {
     pub received_bytes: u64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Heartbeat {
-    #[prost(string, tag = "1")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "2")]
-    pub seq: u64,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Error {
     #[prost(string, tag = "1")]
     pub session_id: ::prost::alloc::string::String,
@@ -117,30 +110,6 @@ pub struct Error {
     pub code: i32,
     #[prost(string, tag = "3")]
     pub message: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct OffsetReport {
-    #[prost(string, tag = "1")]
-    pub session_id: ::prost::alloc::string::String,
-    /// used for resume negotiation
-    #[prost(uint64, tag = "2")]
-    pub received_bytes: u64,
-    /// optional per-chunk checksums
-    #[prost(bytes = "vec", repeated, tag = "3")]
-    pub chunk_checksums: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ResumeRequest {
-    #[prost(string, tag = "1")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "2")]
-    pub offset: u64,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Capability {
-    /// e.g., "checksum:sha256", "resume", "tls", "compress:gzip"
-    #[prost(string, tag = "1")]
-    pub name: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

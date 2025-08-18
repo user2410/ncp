@@ -81,28 +81,8 @@ message TransferResult {
   uint64 received_bytes = 6;
 }
 
-message Heartbeat {
-  string session_id = 1;
-  uint64 seq = 2;
-}
-
 message Error {
   string session_id = 1;
   ErrorCode code = 2;
   string message = 3;
-}
-
-message OffsetReport {
-  string session_id = 1;
-  uint64 received_bytes = 2; // used for resume negotiation
-  repeated bytes chunk_checksums = 3; // optional per-chunk checksums
-}
-
-message ResumeRequest {
-  string session_id = 1;
-  uint64 offset = 2;
-}
-
-message Capability {
-  string name = 1; // e.g., "checksum:sha256", "resume", "tls", "compress:gzip"
 }

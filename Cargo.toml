@@ -3,6 +3,13 @@ name = "ncp"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+opt-level = "s"     # Optimize for size
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce parallel code generation units for better optimization
+strip = "debuginfo" # Strip debug symbols (default in recent Rust versions)
+panic = "abort"     # Abort on panic instead of unwinding (reduces panic handling code)
+
 [dependencies]
 # Protobuf support
 prost = "0.14"
