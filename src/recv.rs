@@ -1,9 +1,7 @@
-use crate::proto::*;
+use crate::protocol::*;
 use crate::diskspace::{check_disk_space, format_bytes};
-use crate::framing::{read_message, write_message, read_exact_bytes};
-use crate::checksum::StreamingChecksum;
 use crate::types::Result;
-use crate::{ChecksumMode, OverwriteMode, vlog};
+use crate::{OverwriteMode, vlog};
 
 use std::fs::{self, File};
 use std::io::{Write, BufWriter, stdin, stdout};
@@ -14,7 +12,6 @@ pub fn execute(
     host: String,
     port: u16,
     dst: PathBuf,
-    checksum_mode: ChecksumMode,
     overwrite_mode: OverwriteMode,
 ) -> Result<()> {
     let listener = TcpListener::bind((host.clone(), port))?;
@@ -27,7 +24,7 @@ pub fn execute(
         println!("Connection from: {}", peer_addr);
         vlog!(2, "Accepted connection from: {}", peer_addr);
         
-        match handle_connection(stream, &dst, checksum_mode.clone(), overwrite_mode.clone()) {
+        match handle_connection(stream, &dst, overwrite_mode.clone()) {
             Ok(()) => {
                 println!("Transfer completed successfully");
                 break;
@@ -35,7 +32,6 @@ pub fn execute(
             Err(e) => {
                 eprintln!("Transfer failed");
                 vlog!(2, "{}", e);
-                // For minimal version, we exit after first attempt
                 return Err(e);
             }
         }
@@ -47,48 +43,35 @@ pub fn execute(
 fn handle_connection(
     mut stream: TcpStream,
     dst_path: &Path,
-    checksum_mode: ChecksumMode,
     overwrite_mode: OverwriteMode,
 ) -> Result<()> {
-    let session_id: String;
+    vlog!(2, "Connection established");
 
-    // Wait for Probe message
     loop {
-        let probe: Probe = read_message(&mut stream)?;
-        session_id = probe.session_id.clone();
-        println!("Received probe from client: {}", probe.client_name);
-        vlog!(2, "Probe received: session_id={}, client={}", session_id, probe.client_name);
-        
-        // Send Established response
-        let established = Established::new(session_id.clone(), env!("CARGO_PKG_VERSION").to_string());
-        write_message(&mut stream, &established)?;
-        break;
-    }
-
-    // Handle multiple files (for directory transfers)
-    loop {
-        // Try to read Meta message
-        let meta_result: std::result::Result<Meta, _> = read_message(&mut stream);
-        let meta = match meta_result {
-            Ok(meta) => meta,
-            Err(_) => break, // No more files
+        let msg_type = match read_message_type(&mut stream) {
+            Ok(t) => t,
+            Err(_) => break,
         };
         
-        let file_meta = meta.file.ok_or("Missing file metadata")?;
+        if msg_type != MSG_META {
+            return Err("Expected Meta message".into());
+        }
         
-        // Determine final destination path
+        let _len = read_message_length(&mut stream)?;
+        let file_meta = read_meta(&mut stream)?;
+        
         let final_path = determine_final_path(dst_path, &file_meta.name, file_meta.is_dir)?;
         
-        vlog!(2, "Receiving {}: {} ({}) to {}", 
+        vlog!(2, "Receiving {}: {} ({} bytes) to {}", 
                if file_meta.is_dir { "directory" } else { "file" },
                file_meta.name, 
-               format_bytes(file_meta.size),
+               file_meta.size,
                final_path.display());
         
         if file_meta.is_dir {
-            handle_directory_entry(&mut stream, &session_id, &final_path, &overwrite_mode)?;
+            handle_directory_entry(&mut stream, &final_path, &overwrite_mode)?;
         } else {
-            handle_file_entry(&mut stream, &session_id, &final_path, &file_meta, &checksum_mode, &overwrite_mode)?;
+            handle_file_entry(&mut stream, &final_path, &file_meta, &overwrite_mode)?;
         }
     }
     
@@ -97,11 +80,9 @@ fn handle_connection(
 
 fn handle_directory_entry(
     stream: &mut TcpStream,
-    session_id: &str,
     final_path: &Path,
     overwrite_mode: &OverwriteMode,
 ) -> Result<()> {
-    // Create directory if it doesn't exist
     if !final_path.exists() {
         fs::create_dir_all(final_path)?;
         vlog!(2, "Created directory: {:?}", final_path);
@@ -109,80 +90,59 @@ fn handle_directory_entry(
         match overwrite_mode {
             OverwriteMode::Ask => {
                 if !prompt_overwrite(final_path)? {
-                    let preflight_fail = PreflightFail::new(
-                        session_id.to_string(),
-                        ErrorCode::ErrPermission,
-                        "User declined directory overwrite".to_string(),
-                    );
-                    write_message(stream, &preflight_fail)?;
+                    let preflight_fail = PreflightFail {
+                        reason: "User declined directory overwrite".to_string(),
+                    };
+                    write_preflight_fail(stream, &preflight_fail)?;
                     return Ok(());
                 }
             }
             OverwriteMode::No => {
                 vlog!(2, "Directory exists, continuing: {:?}", final_path);
             }
-            OverwriteMode::Yes => {
-                // Continue
-            }
+            OverwriteMode::Yes => {}
         }
     }
     
-    // Send PreflightOk for directory
-    let preflight_ok = PreflightOk::new(
-        session_id.to_string(),
-        final_path.exists(),
-        0, // No space check for directories
-    );
-    write_message(stream, &preflight_ok)?;
+    let preflight_ok = PreflightOk { available_space: 0 };
+    write_preflight_ok(stream, &preflight_ok)?;
     
     Ok(())
 }
 
 fn handle_file_entry(
     stream: &mut TcpStream,
-    session_id: &str,
     final_path: &Path,
     file_meta: &FileMeta,
-    checksum_mode: &ChecksumMode,
     overwrite_mode: &OverwriteMode,
 ) -> Result<()> {
-
-    // Check for overwrite conflicts
     if final_path.exists() {
         match overwrite_mode {
             OverwriteMode::Ask => {
                 if !prompt_overwrite(final_path)? {
-                    let preflight_fail = PreflightFail::new(
-                        session_id.to_string(),
-                        ErrorCode::ErrPermission,
-                        "User declined overwrite".to_string(),
-                    );
-                    write_message(stream, &preflight_fail)?;
+                    let preflight_fail = PreflightFail {
+                        reason: "User declined overwrite".to_string(),
+                    };
+                    write_preflight_fail(stream, &preflight_fail)?;
                     return Ok(());
                 }
             }
             OverwriteMode::No => {
                 vlog!(2, "File exists, skipping: {}", final_path.display());
-                let preflight_fail = PreflightFail::new(
-                    session_id.to_string(),
-                    ErrorCode::ErrPermission,
-                    "File exists, skipping".to_string(),
-                );
-                write_message(stream, &preflight_fail)?;
+                let preflight_fail = PreflightFail {
+                    reason: "File exists, skipping".to_string(),
+                };
+                write_preflight_fail(stream, &preflight_fail)?;
                 return Ok(());
             }
-            OverwriteMode::Yes => {
-                // Continue with transfer
-            }
+            OverwriteMode::Yes => {}
         }
     }
 
-    // Create parent directory if needed
     if let Some(parent) = final_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    // Check disk space availability
     let available_space = get_available_space(final_path)?;
     vlog!(2, "Available disk space: {} bytes", available_space);
 
@@ -196,34 +156,28 @@ fn handle_file_entry(
         );
         vlog!(2, "{}", error_msg);
         
-        let preflight_fail = PreflightFail::new(
-            session_id.to_string(),
-            ErrorCode::ErrNoSpace,
-            error_msg,
-        );
-        write_message(stream, &preflight_fail)?;
+        let preflight_fail = PreflightFail { reason: error_msg };
+        write_preflight_fail(stream, &preflight_fail)?;
         return Err("Insufficient disk space".into());
     }
 
-    // Send PreflightOk
-    let preflight_ok = PreflightOk::new(
-        session_id.to_string(),
-        final_path.exists(),
-        available_space,
-    );
-    write_message(stream, &preflight_ok)?;
+    let preflight_ok = PreflightOk { available_space };
+    write_preflight_ok(stream, &preflight_ok)?;
 
-    // Wait for TransferStart
-    let transfer_start: TransferStart = read_message(stream)?;
+    let msg_type = read_message_type(stream)?;
+    let _len = read_message_length(stream)?;
     
-    // Create temporary file for atomic write
+    if msg_type != MSG_TRANSFER_START {
+        return Err("Expected TransferStart message".into());
+    }
+    
+    let transfer_start = read_transfer_start(stream)?;
+    
     let temp_path = final_path.with_extension("ncp_temp");
     let temp_file = File::create(&temp_path)?;
     let mut writer = BufWriter::new(temp_file);
     
-    // Stream file data
     let mut total_bytes = 0u64;
-    let mut checksum_calc = StreamingChecksum::new();
     let mut buffer = [0u8; 8192];
     let file_size = transfer_start.file_size;
     
@@ -233,10 +187,6 @@ fn handle_file_entry(
         
         read_exact_bytes(stream, &mut buffer[..to_read])?;
         writer.write_all(&buffer[..to_read])?;
-        
-        if matches!(checksum_mode, ChecksumMode::Hash) {
-            checksum_calc.update(&buffer[..to_read]);
-        }
         
         total_bytes += to_read as u64;
         
@@ -250,61 +200,25 @@ fn handle_file_entry(
     writer.flush()?;
     drop(writer);
 
-    // Verify checksum if enabled
-    let checksum_match = if matches!(checksum_mode, ChecksumMode::Hash) {
-        let calculated_checksum = checksum_calc.finalize();
-        let expected_checksum = &file_meta.checksum;
-        
-        expected_checksum.is_empty() || (calculated_checksum == *expected_checksum)
-    } else {
-        true
-    };
-
-    let transfer_result = if checksum_match {
-        fs::rename(&temp_path, final_path)?;
-        vlog!(2, "File saved to: {}", final_path.display());
-        TransferResult::new(session_id.to_string(), true, total_bytes)
-    } else {
-        let _ = fs::remove_file(&temp_path);
-        vlog!(2, "Checksum verification failed for file: {}", final_path.display());
-        let mut result = TransferResult::new(session_id.to_string(), false, total_bytes);
-        result.code = ErrorCode::ErrChecksum as i32;
-        result.reason = "Checksum mismatch".to_string();
-        result
-    };
-
-    write_message(stream, &transfer_result)?;
-
-    if !checksum_match {
-        return Err("Checksum verification failed".into());
-    }
+    fs::rename(&temp_path, final_path)?;
+    vlog!(2, "File saved to: {}", final_path.display());
+    
+    let transfer_result = TransferResult { ok: true, received_bytes: total_bytes };
+    write_transfer_result(stream, &transfer_result)?;
 
     Ok(())
 }
 
 fn determine_final_path(dst_path: &Path, file_name: &str, is_dir: bool) -> Result<PathBuf> {
     if dst_path.is_dir() {
-        // dst is directory, put file inside it
         Ok(dst_path.join(file_name))
     } else if dst_path.exists() {
-        // dst is existing file
         if is_dir {
             return Err("Cannot receive directory to existing file".into());
         }
         Ok(dst_path.to_path_buf())
     } else {
-        // dst doesn't exist
-        if let Some(parent) = dst_path.parent() {
-            if parent.is_dir() {
-                // Parent is directory, treat dst as filename
-                Ok(dst_path.to_path_buf())
-            } else {
-                // Need to create parent directories
-                Ok(dst_path.to_path_buf())
-            }
-        } else {
-            Ok(dst_path.to_path_buf())
-        }
+        Ok(dst_path.to_path_buf())
     }
 }
 

@@ -1,17 +1,14 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use std::env;
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-mod checksum;
 mod directory;
 mod diskspace;
-mod framing;
-mod proto;
+mod protocol;
 mod recv;
 mod send;
 mod types;
-mod hostname;
 
 // Global verbosity level
 static VERBOSITY: AtomicU8 = AtomicU8::new(0);
@@ -32,117 +29,215 @@ macro_rules! vlog {
 
 pub(crate) use vlog;
 
-#[derive(Parser)]
-#[command(name = "ncp")]
-#[command(about = "Minimal file transfer over TCP")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
-struct Cli {
-    /// Increase verbosity (-v info, -vv debug, -vvv trace)
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    verbose: u8,
-    
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    Send {
-        #[arg(long, required = true)]
-        host: String,
-        
-        #[arg(long, required = true)]
-        port: u16,
-        
-        #[arg(long, default_value_t = 3)]
-        retries: u32,
-        
-        #[arg(long, value_enum, default_value_t = ChecksumMode::Hash)]
-        checksum: ChecksumMode,
-        
-        #[arg(long, value_enum, default_value_t = OverwriteMode::Ask)]
-        overwrite: OverwriteMode,
-        
-        /// Source file or directory
-        src: PathBuf,
-    },
-    Recv {
-        #[arg(long, default_value_t = String::from("0.0.0.0"))]
-        host: String,
-
-        #[arg(long, required = true)]
-        port: u16,
-        
-        #[arg(long, value_enum, default_value_t = ChecksumMode::Hash)]
-        checksum: ChecksumMode,
-        
-        #[arg(long, value_enum, default_value_t = OverwriteMode::Ask)]
-        overwrite: OverwriteMode,
-        
-        /// Destination file or directory
-        dst: PathBuf,
-    },
-}
-
-#[derive(Clone, ValueEnum)]
-enum ChecksumMode {
-    Hash,
-    None,
-}
-
-#[derive(Clone, ValueEnum)]
+#[derive(Clone)]
 enum OverwriteMode {
     Ask,
     Yes,
     No,
 }
 
-#[derive(Debug)]
-pub enum ExitCode {
-    Success = 0,
-    GeneralError = 1,
-    ProtocolError = 2,
-    IoError = 3,
-    PermissionDenied = 4,
-    ChecksumMismatch = 5,
-    NoSpace = 6,
-    MaxRetriesExceeded = 11,
+struct Args {
+    verbose: u8,
+    command: Command,
 }
 
-impl ExitCode {
-    pub fn exit(self) -> ! {
-        process::exit(self as i32);
+enum Command {
+    Send {
+        host: String,
+        port: u16,
+        retries: u32,
+        overwrite: OverwriteMode,
+        src: PathBuf,
+    },
+    Recv {
+        host: String,
+        port: u16,
+        overwrite: OverwriteMode,
+        dst: PathBuf,
+    },
+}
+
+fn parse_args() -> Result<Args, String> {
+    let args: Vec<String> = env::args().collect();
+    
+    if args.len() < 2 {
+        return Err("Usage: ncp [send|recv] [options]".to_string());
     }
+    
+    let mut verbose = 0;
+    let mut i = 1;
+    
+    while i < args.len() && args[i].starts_with('-') && args[i] != "--" {
+        match args[i].as_str() {
+            "-v" => verbose = 1,
+            "-vv" => verbose = 2,
+            "--help" | "-h" => {
+                print_help();
+                process::exit(0);
+            }
+            _ => break,
+        }
+        i += 1;
+    }
+    
+    if i >= args.len() {
+        return Err("Missing command".to_string());
+    }
+    
+    let command = match args[i].as_str() {
+        "send" => parse_send_args(&args[i+1..])?,
+        "recv" => parse_recv_args(&args[i+1..])?,
+        _ => return Err(format!("Unknown command: {}", args[i])),
+    };
+    
+    Ok(Args { verbose, command })
+}
+
+fn parse_send_args(args: &[String]) -> Result<Command, String> {
+    let mut host = None;
+    let mut port = None;
+    let mut retries = 3;
+    let mut overwrite = OverwriteMode::Ask;
+    let mut src = None;
+    
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--host" => {
+                i += 1;
+                if i >= args.len() { return Err("--host requires value".to_string()); }
+                host = Some(args[i].clone());
+            }
+            "--port" => {
+                i += 1;
+                if i >= args.len() { return Err("--port requires value".to_string()); }
+                port = Some(args[i].parse().map_err(|_| "Invalid port".to_string())?);
+            }
+            "--retries" => {
+                i += 1;
+                if i >= args.len() { return Err("--retries requires value".to_string()); }
+                retries = args[i].parse().map_err(|_| "Invalid retries".to_string())?;
+            }
+            "--overwrite" => {
+                i += 1;
+                if i >= args.len() { return Err("--overwrite requires value".to_string()); }
+                overwrite = match args[i].as_str() {
+                    "ask" => OverwriteMode::Ask,
+                    "yes" => OverwriteMode::Yes,
+                    "no" => OverwriteMode::No,
+                    _ => return Err("Invalid overwrite mode".to_string()),
+                };
+            }
+            arg if !arg.starts_with('-') => {
+                src = Some(PathBuf::from(arg));
+            }
+            _ => return Err(format!("Unknown option: {}", args[i])),
+        }
+        i += 1;
+    }
+    
+    Ok(Command::Send {
+        host: host.ok_or("--host required")?,
+        port: port.ok_or("--port required")?,
+        retries,
+        overwrite,
+        src: src.ok_or("source path required")?,
+    })
+}
+
+fn parse_recv_args(args: &[String]) -> Result<Command, String> {
+    let mut host = "0.0.0.0".to_string();
+    let mut port = None;
+    let mut overwrite = OverwriteMode::Ask;
+    let mut dst = None;
+    
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--host" => {
+                i += 1;
+                if i >= args.len() { return Err("--host requires value".to_string()); }
+                host = args[i].clone();
+            }
+            "--port" => {
+                i += 1;
+                if i >= args.len() { return Err("--port requires value".to_string()); }
+                port = Some(args[i].parse().map_err(|_| "Invalid port".to_string())?);
+            }
+            "--overwrite" => {
+                i += 1;
+                if i >= args.len() { return Err("--overwrite requires value".to_string()); }
+                overwrite = match args[i].as_str() {
+                    "ask" => OverwriteMode::Ask,
+                    "yes" => OverwriteMode::Yes,
+                    "no" => OverwriteMode::No,
+                    _ => return Err("Invalid overwrite mode".to_string()),
+                };
+            }
+            arg if !arg.starts_with('-') => {
+                dst = Some(PathBuf::from(arg));
+            }
+            _ => return Err(format!("Unknown option: {}", args[i])),
+        }
+        i += 1;
+    }
+    
+    Ok(Command::Recv {
+        host,
+        port: port.ok_or("--port required")?,
+        overwrite,
+        dst: dst.ok_or("destination path required")?,
+    })
+}
+
+fn print_help() {
+    println!("ncp {} - Minimal file transfer over TCP", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("USAGE:");
+    println!("    ncp [-v|-vv] send --host <HOST> --port <PORT> [OPTIONS] <SRC>");
+    println!("    ncp [-v|-vv] recv --port <PORT> [OPTIONS] <DST>");
+    println!();
+    println!("OPTIONS:");
+    println!("    -v, -vv          Increase verbosity");
+    println!("    --host <HOST>    Target host (send) or bind host (recv, default: 0.0.0.0)");
+    println!("    --port <PORT>    Port number");
+    println!("    --retries <N>    Retry attempts (send only, default: 3)");
+    println!("    --overwrite <M>  Overwrite mode: ask, yes, no (default: ask)");
+    println!("    -h, --help       Show this help");
 }
 
 fn main() {
-    let cli = Cli::parse();
-    
-    // Set global verbosity level
-    VERBOSITY.store(cli.verbose, Ordering::Relaxed);
-    
-    vlog!(1, "Starting ncp with verbosity level {}", cli.verbose);
-
-    let result = match cli.command {
-        Commands::Send { host, port, retries, checksum, overwrite, src } => {
-            vlog!(2, "Executing send command: {}:{} -> {:?}", host, port, src);
-            send::execute(host, port, src, retries, checksum, overwrite)
+    let args = match parse_args() {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            process::exit(1);
         }
-        Commands::Recv { host, port, checksum, overwrite, dst } => {
+    };
+    
+    VERBOSITY.store(args.verbose, Ordering::Relaxed);
+    vlog!(1, "Starting ncp with verbosity level {}", args.verbose);
+
+    let result = match args.command {
+        Command::Send { host, port, retries, overwrite, src } => {
+            vlog!(2, "Executing send command: {}:{} -> {:?}", host, port, src);
+            send::execute(host, port, src, retries, overwrite)
+        }
+        Command::Recv { host, port, overwrite, dst } => {
             vlog!(2, "Executing recv command: {}:{} -> {:?}", host, port, dst);
-            recv::execute(host, port, dst, checksum, overwrite)
+            recv::execute(host, port, dst, overwrite)
         }
     };
 
     match result {
         Ok(()) => {
             vlog!(1, "Operation completed successfully");
-            ExitCode::Success.exit();
+            process::exit(0);
         }
         Err(e) => {
             eprintln!("Error: {}", e);
             vlog!(2, "Operation failed with error: {}", e);
-            ExitCode::GeneralError.exit();
+            process::exit(1);
         }
     }
 }

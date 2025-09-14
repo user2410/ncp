@@ -5,17 +5,14 @@ Lightweight file transfer over TCP with protobuf control messages. Minimal depen
 ## Goals
 
 - **Smallest binary**: absolute minimum dependencies, std library only where possible
-- **Working**: basic file transfer with checksum validation
 - **Safe**: Rust memory safety and atomic file handling
 - **Simple**: plain TCP, synchronous I/O, essential features only
 
 ## Protocol Overview
 
 - Single TCP connection for control messages (protobuf) and raw file bytes
-- Sender connects and sends `Probe` until receiver responds with `Established`
 - Sender sends file metadata (`Meta`), receiver validates and replies (`PreflightResult`)
-- If OK, sender streams raw bytes, receiver writes to temp file and validates checksum
-- Atomic rename to final filename after successful checksum validation
+- If OK, sender streams raw bytes, receiver writes to file 
 
 ## CLI Usage
 
@@ -31,9 +28,6 @@ ncp send --host 127.0.0.1 --port 9000 ./data.bin
 
 # Send directory
 ncp send --host 127.0.0.1 --port 9000 ./my_folder
-
-# With retries and checksum
-ncp send --host 127.0.0.1 --port 9000 --retries 5 --checksum hash ./data.bin
 
 # With verbose output (debug level)
 ncp send -vv --host 127.0.0.1 --port 9000 ./data.bin
@@ -54,7 +48,6 @@ ncp send [options] --host {host} --port {port} {src}
 ### Common
 - `-v, --verbose` (increase verbosity: -v info, -vv debug, -vvv trace)
 - `--retries N` (default: 3)
-- `--checksum [hash|none]` (default: hash)
 - `--overwrite [ask|yes|no]` (default: ask)
 
 ### Send
@@ -98,7 +91,6 @@ ncp/
 │  ├─ recv.rs
 │  ├─ framing.rs
 │  ├─ proto.rs
-│  └─ checksum.rs
 ```
 
 ## Wire Format
@@ -108,18 +100,15 @@ ncp/
 
 ## Key Messages (Protobuf)
 
-- `Probe` - sender initiates connection
-- `Established` - receiver confirms with session_id
-- `Meta` - file metadata (name, size, checksum)
+- `Meta` - file metadata (name, size)
 - `PreflightResult` - receiver validation result
 - `TransferStart` - begin raw data transfer
-- `TransferResult` - final success/failure with checksum
+- `TransferResult` - final success/failure
 
 ## Implementation Notes
 
 - **Networking**: `std::net::TcpStream` (synchronous)
 - **File I/O**: `std::fs` and `std::io`
-- **Checksum**: `std::collections::hash_map::DefaultHasher`
 - **Error handling**: `std::error::Error`
 - **Atomic write**: temp file + `std::fs::rename`
 
@@ -130,7 +119,6 @@ ncp/
 - `2` - Protocol error
 - `3` - I/O error
 - `4` - Permission denied
-- `5` - Checksum mismatch
 - `6` - No space
 - `11` - Max retries exceeded
 
@@ -146,5 +134,4 @@ ncp/
 - Configuration files
 - Timeouts
 - Rate limiting
-- Advanced checksums (sha256, etc.)
 - Bind address option (binds to all interfaces)

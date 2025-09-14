@@ -4,18 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [profile.release]
-opt-level = "s"     # Optimize for size
+opt-level = "z"     # Optimize aggressively for size
 lto = true          # Enable Link Time Optimization
 codegen-units = 1   # Reduce parallel code generation units for better optimization
-strip = "debuginfo" # Strip debug symbols (default in recent Rust versions)
+strip = true        # Strip all symbols
 panic = "abort"     # Abort on panic instead of unwinding (reduces panic handling code)
+overflow-checks = false  # Disable overflow checks in release
 
 [dependencies]
-# Protobuf support
-prost = "0.14"
-prost-types = "0.14"
-# CLI parsing
-clap = { version = "4.5", features = ["derive"] }
-
-[build-dependencies]
-prost-build = "0.14"
+# No external dependencies - std only
