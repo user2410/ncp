@@ -52,44 +52,6 @@ pub fn execute(
     }
 }
 
-pub fn execute_listen(
-    port: u16,
-    src: PathBuf,
-    overwrite_mode: OverwriteMode,
-) -> Result<()> {
-    if !src.exists() {
-        return Err(format!("Source path does not exist: {}", src.display()).into());
-    }
-
-    let is_directory = src.is_dir();
-    vlog!(2, "Source is {}: {:?}", if is_directory { "directory" } else { "file" }, src);
-
-    let listener = TcpListener::bind(("0.0.0.0", port))?;
-    println!("Listening on port {} (send mode)", port);
-    vlog!(2, "TCP listener bound to 0.0.0.0:{}", port);
-
-    for stream in listener.incoming() {
-        let stream = stream?;
-        let peer_addr = stream.peer_addr()?;
-        println!("Connection from: {}", peer_addr);
-        vlog!(2, "Accepted connection from: {}", peer_addr);
-        
-        match handle_send_connection(stream, &src, &overwrite_mode, is_directory) {
-            Ok(()) => {
-                println!("Transfer completed successfully");
-                break;
-            }
-            Err(e) => {
-                eprintln!("Transfer failed: {}", e);
-                vlog!(2, "Transfer failed with error: {}", e);
-                return Err(e);
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn attempt_transfer(
     host: &str,
     port: u16,
@@ -102,23 +64,6 @@ fn attempt_transfer(
     let mut stream = TcpStream::connect((host, port))?;
     
     println!("Connection established");
-    vlog!(2, "Connection established");
-
-    if is_directory {
-        transfer_directory(&mut stream, src_path)?;
-    } else {
-        transfer_single_file(&mut stream, src_path)?;
-    }
-
-    Ok(())
-}
-
-fn handle_send_connection(
-    mut stream: TcpStream,
-    src_path: &Path,
-    _overwrite_mode: &OverwriteMode,
-    is_directory: bool,
-) -> Result<()> {
     vlog!(2, "Connection established");
 
     if is_directory {
@@ -235,6 +180,7 @@ fn transfer_file_data(
         return Err(format!("File size mismatch: sent {} bytes, expected {}", total_sent, file_size).into());
     }
 
+    // Wait for TransferResult
     let msg_type = read_message_type(stream)?;
     let _len = read_message_length(stream)?;
     

@@ -43,10 +43,11 @@ struct Args {
 
 enum Command {
     Send {
-        host: String,
+        host: Option<String>,
         port: u16,
         retries: u32,
         overwrite: OverwriteMode,
+        listen: bool,
         src: PathBuf,
     },
     Recv {
@@ -98,6 +99,7 @@ fn parse_send_args(args: &[String]) -> Result<Command, String> {
     let mut port = None;
     let mut retries = 3;
     let mut overwrite = OverwriteMode::Ask;
+    let mut listen = false;
     let mut src = None;
     
     let mut i = 0;
@@ -128,6 +130,9 @@ fn parse_send_args(args: &[String]) -> Result<Command, String> {
                     _ => return Err("Invalid overwrite mode".to_string()),
                 };
             }
+            "--listen" | "-l" => {
+                listen = true;
+            }
             arg if !arg.starts_with('-') => {
                 src = Some(PathBuf::from(arg));
             }
@@ -136,11 +141,16 @@ fn parse_send_args(args: &[String]) -> Result<Command, String> {
         i += 1;
     }
     
+    if !listen && host.is_none() {
+        return Err("--host required (or use --listen)".to_string());
+    }
+    
     Ok(Command::Send {
-        host: host.ok_or("--host required")?,
+        host,
         port: port.ok_or("--port required")?,
         retries,
         overwrite,
+        listen,
         src: src.ok_or("source path required")?,
     })
 }
@@ -195,12 +205,14 @@ fn print_help() {
     println!();
     println!("USAGE:");
     println!("    ncp [-v|-vv] send --host <HOST> --port <PORT> [OPTIONS] <SRC>");
+    println!("    ncp [-v|-vv] send --listen --port <PORT> [OPTIONS] <SRC>");
     println!("    ncp [-v|-vv] recv --port <PORT> [OPTIONS] <DST>");
     println!();
     println!("OPTIONS:");
     println!("    -v, -vv          Increase verbosity");
-    println!("    --host <HOST>    Target host (send) or bind host (recv, default: 0.0.0.0)");
+    println!("    --host <HOST>    Target host (required for send without --listen)");
     println!("    --port <PORT>    Port number");
+    println!("    --listen, -l     Listen mode (send only)");
     println!("    --retries <N>    Retry attempts (send only, default: 3)");
     println!("    --overwrite <M>  Overwrite mode: ask, yes, no (default: ask)");
     println!("    -h, --help       Show this help");
@@ -219,9 +231,15 @@ fn main() {
     vlog!(1, "Starting ncp with verbosity level {}", args.verbose);
 
     let result = match args.command {
-        Command::Send { host, port, retries, overwrite, src } => {
-            vlog!(2, "Executing send command: {}:{} -> {:?}", host, port, src);
-            send::execute(host, port, src, retries, overwrite)
+        Command::Send { host, port, retries, overwrite, listen, src } => {
+            if listen {
+                vlog!(2, "Executing send listen command: port {} -> {:?}", port, src);
+                send::execute_listen(port, src, overwrite)
+            } else {
+                let host = host.unwrap();
+                vlog!(2, "Executing send command: {}:{} -> {:?}", host, port, src);
+                send::execute(host, port, src, retries, overwrite)
+            }
         }
         Command::Recv { host, port, overwrite, dst } => {
             vlog!(2, "Executing recv command: {}:{} -> {:?}", host, port, dst);
