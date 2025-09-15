@@ -40,6 +40,25 @@ pub fn execute(
     Ok(())
 }
 
+pub fn execute_connect(
+    host: String,
+    port: u16,
+    dst: PathBuf,
+    overwrite_mode: OverwriteMode,
+) -> Result<()> {
+    println!("Connecting to {}:{}...", host, port);
+    vlog!(2, "Attempting TCP connection to {}:{}", host, port);
+    let stream = TcpStream::connect((host, port))?;
+    
+    println!("Connection established");
+    vlog!(2, "Connection established");
+    
+    handle_connection(stream, &dst, overwrite_mode)?;
+    println!("Transfer completed successfully");
+    
+    Ok(())
+}
+
 fn handle_connection(
     mut stream: TcpStream,
     dst_path: &Path,

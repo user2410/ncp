@@ -16,6 +16,7 @@ Lightweight file transfer over TCP with protobuf control messages. Minimal depen
 
 ## CLI Usage
 
+### Traditional Usage
 ```bash
 # Receive file to directory
 ncp recv --port 9000 ./incoming
@@ -33,14 +34,34 @@ ncp send --host 127.0.0.1 --port 9000 ./my_folder
 ncp send -vv --host 127.0.0.1 --port 9000 ./data.bin
 ```
 
+### Port Forwarding Usage (ECS + SSM)
+```bash
+# 1. On ECS Container (Remote)
+ncp send --listen --port 1234 /path/to/file.txt
+
+# 2. On Local Machine (Terminal 1)
+aws ssm start-session --target i-xxxxxxxxxxxxx \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters 'portNumber=[1234],localPortNumber=[3456]'
+
+# 3. On Local Machine (Terminal 2)
+ncp recv --host 127.0.0.1 --port 3456 ./received_file.txt
+```
+
 ## CLI Syntax
 
 ```
-# Receiver
+# Receiver (Listen Mode)
 ncp recv [options] --port {port} {dst}
 
-# Sender  
+# Receiver (Connect Mode - for port forwarding)
+ncp recv [options] --host {host} --port {port} {dst}
+
+# Sender (Connect Mode)
 ncp send [options] --host {host} --port {port} {src}
+
+# Sender (Listen Mode - for port forwarding)
+ncp send [options] --listen --port {port} {src}
 ```
 
 ## CLI Options
@@ -51,12 +72,15 @@ ncp send [options] --host {host} --port {port} {src}
 - `--overwrite [ask|yes|no]` (default: ask)
 
 ### Send
-- `--host HOST` (required)
+- `--host HOST` (required for connect mode)
 - `--port PORT` (required)
+- `--listen, -l` (listen mode for port forwarding)
 - `src` - source file or directory (required)
 
 ### Receive
+- `--host HOST` (enables connect mode for port forwarding)
 - `--port PORT` (required)
+- `--connect, -c` (connect mode, auto-enabled with --host)
 - `dst` - destination file or directory (required)
 
 ## File/Directory Handling
@@ -73,37 +97,62 @@ ncp send [options] --host {host} --port {port} {src}
 - `--overwrite yes`: automatically overwrite existing files
 - `--overwrite no`: skip existing files, continue transfer
 
+## Port Forwarding Support
+
+**Problem**: SSM port forwarding binds the local port, causing "address already in use" errors.
+
+**Solution**: Use connect mode instead of listen mode on the local machine.
+
+| Mode | Command | Behavior |
+|------|---------|----------|
+| **Listen** | `ncp recv --port 3456 file.txt` | ❌ Tries to bind port (fails with SSM) |
+| **Connect** | `ncp recv --host 127.0.0.1 --port 3456 file.txt` | ✅ Connects to forwarded port |
+
+**Connection Flow**:
+```
+ECS Container:1234 <---> SSM Port Forward <---> Local:3456
+     (sender)                                    (receiver)
+   [listen mode]                              [connect mode]
+```
+
 ## Dependencies (Minimal)
 
-* **Protobuf**: `prost` (prost-build in build.rs) - essential for protocol
-* **CLI**: `clap` with minimal features - essential for usability
+* **None** - Uses only Rust standard library
+* **Binary Size**: 378K (48% smaller than protobuf+clap version)
+* **Protocol**: Simple binary format instead of protobuf
+* **CLI**: Manual argument parsing instead of clap
 
 ## Project Structure
 
 ```
 ncp/
 ├─ Cargo.toml
-├─ build.rs
-├─ proto/ncp.proto
 ├─ src/
 │  ├─ main.rs
 │  ├─ send.rs
 │  ├─ recv.rs
-│  ├─ framing.rs
-│  ├─ proto.rs
+│  ├─ protocol.rs
+│  ├─ directory.rs
+│  ├─ diskspace.rs
+│  └─ types.rs
+├─ test/
+│  └─ integration.sh
+└─ USAGE.md
 ```
 
 ## Wire Format
 
-- Control messages: 4-byte big-endian length + protobuf bytes
+- Control messages: `[type:u8][len:u32][data]` (big-endian)
 - Raw data: exact file_size bytes with no framing after `TransferStart`
+- No checksum validation (removed for minimal size)
 
-## Key Messages (Protobuf)
+## Key Messages (Binary Protocol)
 
-- `Meta` - file metadata (name, size)
-- `PreflightResult` - receiver validation result
-- `TransferStart` - begin raw data transfer
-- `TransferResult` - final success/failure
+- `MSG_META` (1) - file metadata (name, size, is_dir)
+- `MSG_PREFLIGHT_OK` (2) - receiver validation success
+- `MSG_PREFLIGHT_FAIL` (3) - receiver validation failure
+- `MSG_TRANSFER_START` (4) - begin raw data transfer
+- `MSG_TRANSFER_RESULT` (5) - final success/failure
 
 ## Implementation Notes
 
@@ -134,4 +183,7 @@ ncp/
 - Configuration files
 - Timeouts
 - Rate limiting
+- Checksum validation
+- Protobuf dependencies
+- Clap CLI parsing
 - Bind address option (binds to all interfaces)

@@ -54,6 +54,7 @@ enum Command {
         host: String,
         port: u16,
         overwrite: OverwriteMode,
+        connect: bool,
         dst: PathBuf,
     },
 }
@@ -159,6 +160,7 @@ fn parse_recv_args(args: &[String]) -> Result<Command, String> {
     let mut host = "0.0.0.0".to_string();
     let mut port = None;
     let mut overwrite = OverwriteMode::Ask;
+    let mut connect = false;
     let mut dst = None;
     
     let mut i = 0;
@@ -168,6 +170,7 @@ fn parse_recv_args(args: &[String]) -> Result<Command, String> {
                 i += 1;
                 if i >= args.len() { return Err("--host requires value".to_string()); }
                 host = args[i].clone();
+                connect = true; // Auto-enable connect mode when host is specified
             }
             "--port" => {
                 i += 1;
@@ -184,6 +187,9 @@ fn parse_recv_args(args: &[String]) -> Result<Command, String> {
                     _ => return Err("Invalid overwrite mode".to_string()),
                 };
             }
+            "--connect" | "-c" => {
+                connect = true;
+            }
             arg if !arg.starts_with('-') => {
                 dst = Some(PathBuf::from(arg));
             }
@@ -196,6 +202,7 @@ fn parse_recv_args(args: &[String]) -> Result<Command, String> {
         host,
         port: port.ok_or("--port required")?,
         overwrite,
+        connect,
         dst: dst.ok_or("destination path required")?,
     })
 }
@@ -207,12 +214,14 @@ fn print_help() {
     println!("    ncp [-v|-vv] send --host <HOST> --port <PORT> [OPTIONS] <SRC>");
     println!("    ncp [-v|-vv] send --listen --port <PORT> [OPTIONS] <SRC>");
     println!("    ncp [-v|-vv] recv --port <PORT> [OPTIONS] <DST>");
+    println!("    ncp [-v|-vv] recv --host <HOST> --port <PORT> [OPTIONS] <DST>");
     println!();
     println!("OPTIONS:");
     println!("    -v, -vv          Increase verbosity");
-    println!("    --host <HOST>    Target host (required for send without --listen)");
+    println!("    --host <HOST>    Target host (auto-enables connect mode for recv)");
     println!("    --port <PORT>    Port number");
     println!("    --listen, -l     Listen mode (send only)");
+    println!("    --connect, -c    Connect mode (recv only, auto-enabled with --host)");
     println!("    --retries <N>    Retry attempts (send only, default: 3)");
     println!("    --overwrite <M>  Overwrite mode: ask, yes, no (default: ask)");
     println!("    -h, --help       Show this help");
@@ -241,9 +250,14 @@ fn main() {
                 send::execute(host, port, src, retries, overwrite)
             }
         }
-        Command::Recv { host, port, overwrite, dst } => {
-            vlog!(2, "Executing recv command: {}:{} -> {:?}", host, port, dst);
-            recv::execute(host, port, dst, overwrite)
+        Command::Recv { host, port, overwrite, connect, dst } => {
+            if connect {
+                vlog!(2, "Executing recv connect command: {}:{} -> {:?}", host, port, dst);
+                recv::execute_connect(host, port, dst, overwrite)
+            } else {
+                vlog!(2, "Executing recv listen command: {}:{} -> {:?}", host, port, dst);
+                recv::execute(host, port, dst, overwrite)
+            }
         }
     };
 
