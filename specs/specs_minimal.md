@@ -35,17 +35,33 @@ ncp send -vv --host 127.0.0.1 --port 9000 ./data.bin
 ```
 
 ### Port Forwarding Usage (ECS + SSM)
+
+**Scenario 1: Container → Local (Container sends file)**
 ```bash
-# 1. On ECS Container (Remote)
+# 1. On ECS Container (sender in listen mode)
 ncp send --listen --port 1234 /path/to/file.txt
 
-# 2. On Local Machine (Terminal 1)
+# 2. On Local Machine (Terminal 1 - port forward)
 aws ssm start-session --target i-xxxxxxxxxxxxx \
   --document-name AWS-StartPortForwardingSession \
   --parameters 'portNumber=[1234],localPortNumber=[3456]'
 
-# 3. On Local Machine (Terminal 2)
+# 3. On Local Machine (Terminal 2 - receiver connects)
 ncp recv --host 127.0.0.1 --port 3456 ./received_file.txt
+```
+
+**Scenario 2: Local → Container (Container receives file)**
+```bash
+# 1. On ECS Container (receiver in listen mode)
+ncp recv --listen --port 1234 /tmp/received_file.txt
+
+# 2. On Local Machine (Terminal 1 - port forward)
+aws ssm start-session --target i-xxxxxxxxxxxxx \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters 'portNumber=[1234],localPortNumber=[3456]'
+
+# 3. On Local Machine (Terminal 2 - sender connects)
+ncp send --host 127.0.0.1 --port 3456 ./local_file.txt
 ```
 
 ## CLI Syntax
@@ -53,6 +69,7 @@ ncp recv --host 127.0.0.1 --port 3456 ./received_file.txt
 ```
 # Receiver (Listen Mode)
 ncp recv [options] --port {port} {dst}
+ncp recv [options] --listen --port {port} {dst}
 
 # Receiver (Connect Mode - for port forwarding)
 ncp recv [options] --host {host} --port {port} {dst}
@@ -80,6 +97,7 @@ ncp send [options] --listen --port {port} {src}
 ### Receive
 - `--host HOST` (enables connect mode for port forwarding)
 - `--port PORT` (required)
+- `--listen, -l` (explicit listen mode, useful for containers)
 - `--connect, -c` (connect mode, auto-enabled with --host)
 - `dst` - destination file or directory (required)
 
@@ -108,11 +126,20 @@ ncp send [options] --listen --port {port} {src}
 | **Listen** | `ncp recv --port 3456 file.txt` | ❌ Tries to bind port (fails with SSM) |
 | **Connect** | `ncp recv --host 127.0.0.1 --port 3456 file.txt` | ✅ Connects to forwarded port |
 
-**Connection Flow**:
+**Connection Flows**:
+
+*Scenario 1 (Container sends):*
 ```
 ECS Container:1234 <---> SSM Port Forward <---> Local:3456
      (sender)                                    (receiver)
    [listen mode]                              [connect mode]
+```
+
+*Scenario 2 (Container receives):*
+```
+Local:3456 <---> SSM Port Forward <---> ECS Container:1234
+  (sender)                                    (receiver)
+[connect mode]                              [listen mode]
 ```
 
 ## Dependencies (Minimal)
