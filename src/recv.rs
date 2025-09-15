@@ -158,14 +158,52 @@ fn handle_file_entry(
         }
     }
 
+    // Ensure parent directory exists before checking disk space
     if let Some(parent) = final_path.parent() {
-        fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            vlog!(2, "Creating parent directory: {:?}", parent);
+            if let Err(e) = fs::create_dir_all(parent) {
+                vlog!(2, "Failed to create parent directory: {}", e);
+                let preflight_fail = PreflightFail { 
+                    reason: format!("Cannot create parent directory: {}", e) 
+                };
+                write_preflight_fail(stream, &preflight_fail)?;
+                return Err(e.into());
+            }
+            vlog!(2, "Parent directory created successfully");
+        } else {
+            vlog!(2, "File is in current directory");
+        }
+    } else {
+        vlog!(2, "No parent directory for path: {:?}", final_path);
     }
 
-    let available_space = get_available_space(final_path)?;
-    vlog!(2, "Available disk space: {} bytes", available_space);
+    let available_space = match get_available_space(final_path) {
+        Ok(space) => {
+            vlog!(2, "Available disk space: {} bytes", space);
+            space
+        }
+        Err(e) => {
+            vlog!(2, "Failed to get available space: {}", e);
+            let preflight_fail = PreflightFail { 
+                reason: format!("Cannot check disk space: {}", e) 
+            };
+            write_preflight_fail(stream, &preflight_fail)?;
+            return Err(e);
+        }
+    };
 
-    let has_enough_space = check_disk_space(final_path, file_meta.size)?;
+    let has_enough_space = match check_disk_space(final_path, file_meta.size) {
+        Ok(result) => result,
+        Err(e) => {
+            vlog!(2, "Disk space check failed: {}", e);
+            let preflight_fail = PreflightFail { 
+                reason: format!("Disk space check failed: {}", e) 
+            };
+            write_preflight_fail(stream, &preflight_fail)?;
+            return Err(e);
+        }
+    };
     
     if !has_enough_space {
         let error_msg = format!(

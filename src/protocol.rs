@@ -54,6 +54,7 @@ pub fn write_meta<W: Write>(writer: &mut W, meta: &FileMeta) -> Result<()> {
 }
 
 pub fn read_meta<R: Read>(reader: &mut R) -> Result<FileMeta> {
+    // Message header (type + length) already read by caller
     let mut buf = [0u8; 8];
     reader.read_exact(&mut buf)?;
     let size = u64::from_be_bytes(buf);

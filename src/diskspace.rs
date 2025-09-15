@@ -11,7 +11,13 @@ pub fn get_available_space<P: AsRef<Path>>(path: P) -> Result<u64> {
     let check_path = if path.exists() {
         path
     } else {
-        path.parent().unwrap_or(path)
+        let parent = path.parent().unwrap_or_else(|| Path::new(""));
+
+        if parent.as_os_str().is_empty() {
+            Path::new(".") // Use current directory instead of empty string
+        } else {
+            parent
+        }
     };
     
     #[cfg(unix)]
