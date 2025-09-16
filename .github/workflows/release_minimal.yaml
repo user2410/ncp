@@ -76,7 +76,7 @@ jobs:
           - os: macos-13
             target: x86_64-apple-darwin
           - os: macos-26
-            target: aarch64-apple-darwin
+            target: arm64-apple-darwin
 
     steps:
       - name: Checkout
@@ -89,7 +89,34 @@ jobs:
 
       - name: Build C++ project
         working-directory: cppsrc
-        run: make ${{ env.PROJECT_NAME }}
+        run: |
+          make ${{ env.PROJECT_NAME }}
+          if [[ "${{ matrix.os }}" == "macos"* ]]; then
+            strip -x ${{ env.PROJECT_NAME }}
+          else
+            strip ${{ env.PROJECT_NAME }}
+          fi
+      
+      - name: Verify binary architecture
+        working-directory: cppsrc
+        shell: bash
+        run: |
+          BINARY="${{ env.PROJECT_NAME }}"
+          FILE_BINARY=$(file "$BINARY")
+          echo "Binary file info: $FILE_BINARY"
+
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu|x86_64-apple-darwin)
+              echo "$FILE_BINARY" | grep -q 'x86-64\|x86_64' || { echo "Architecture mismatch!"; exit 1; }
+              ;;
+            aarch64-unknown-linux-gnu|arm64-apple-darwin)
+              echo "$FILE_BINARY" | grep -q 'aarch64\|arm64' || { echo "Architecture mismatch!"; exit 1; }
+              ;;
+            *)
+              echo "Unknown architecture ${matrix.target}"
+              exit 1
+              ;;
+          esac
 
       - name: Rename C++ artifact
         run: |
@@ -116,15 +143,20 @@ jobs:
       - name: Set release name
         run: |
           TAG="${{ github.ref_name }}"
-          if [[ "$TAG" == *"-minimal" ]]; then
-            echo "RELEASE_NAME=Minimal Release $TAG" >> $GITHUB_ENV
+          if [[ "$TAG" == "minimal" ]]; then
+            echo "RELEASE_NAME=Minimal Release" >> $GITHUB_ENV
           else
             echo "RELEASE_NAME=Release $TAG" >> $GITHUB_ENV
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          body: |
+            This release contains minimal version of ncp: no external dependencies, smallest possible binary.
+            Suitable for trusted network environments, such as internal network or VPN.
+            For more information, see [specs_minimal.md](specs/specs_minimal.md)
+          generate_release_notes: false
           name: ${{ env.RELEASE_NAME }}
           files: artifacts/**
