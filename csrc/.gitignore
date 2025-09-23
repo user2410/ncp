@@ -1,0 +1,6 @@
+obj/*
+!obj/.gitkeep
+
+ncp
+test_*
+!tests/*
