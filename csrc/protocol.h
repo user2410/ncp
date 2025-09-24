@@ -9,17 +9,18 @@ extern "C" {
 #endif
 
 // Message types
-#define MSG_META           1
-#define MSG_PREFLIGHT_OK   2
-#define MSG_PREFLIGHT_FAIL 3
-#define MSG_TRANSFER_START 4
-#define MSG_TRANSFER_RESULT 5
+#define MSG_META           1  // FileMeta message
+#define MSG_PREFLIGHT_OK   2  // PreflightOK response to FileMeta
+#define MSG_PREFLIGHT_FAIL 3  // PreflightFail response to FileMeta
+#define MSG_TRANSFER_START 4  // TransferStart message
+#define MSG_TRANSFER_RESULT 5  // TransferResult message
 
 // Protocol structures
 typedef struct {
     char* name;          // Dynamically allocated
     uint64_t size;
     int is_dir;
+    uint8_t overwrite_mode;  // 0: ask, 1: yes, 2: no
 } FileMeta;
 
 typedef struct {

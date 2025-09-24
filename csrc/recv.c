@@ -167,34 +167,104 @@ static int create_parent_directories(const char* path) {
 }
 
 static int handle_directory_entry(Socket* sock, const char* final_path, OverwriteMode overwrite_mode) {
-    FILE* stream = fdopen(dup(sock->fd), "wb+");
-    if (!stream) return -1;
+    fprintf(stderr, "DEBUG: handle_directory_entry: path=%s\n", final_path);
     
-    struct stat st;
-    if (stat(final_path, &st) == 0) {
-        switch (overwrite_mode) {
-            case OVERWRITE_ASK:
-                if (!prompt_overwrite(final_path)) {
-                    PreflightFail preflight_fail = {"User declined directory overwrite"};
-                    write_preflight_fail(stream, &preflight_fail);
-                    fclose(stream);
-                    return -1;
-                }
-                break;
-            case OVERWRITE_NO:
-            case OVERWRITE_YES:
-                break;
-        }
-    }
-    
-    if (mkdir(final_path, 0755) != 0 && errno != EEXIST) {
-        snprintf(error_buffer, sizeof(error_buffer), "Failed to create directory: %s", strerror(errno));
-        fclose(stream);
+    int fd_dup = dup(sock->fd);
+    if (fd_dup < 0) {
+        fprintf(stderr, "DEBUG: Failed to duplicate socket fd: %s\n", strerror(errno));
         return -1;
     }
     
+    FILE* stream = fdopen(fd_dup, "wb+");
+    if (!stream) {
+        fprintf(stderr, "DEBUG: Failed to create stream: %s\n", strerror(errno));
+        close(fd_dup);
+        return -1;
+    }
+    
+    // Disable buffering on socket stream
+    if (setvbuf(stream, NULL, _IONBF, 0) != 0) {
+        fprintf(stderr, "Warning: Failed to disable buffering: %s\n", strerror(errno));
+    }
+
+    struct stat st;
+    if (stat(final_path, &st) == 0) {
+        fprintf(stderr, "DEBUG: Path exists, mode=%o\n", st.st_mode & S_IFMT);
+        if (!S_ISDIR(st.st_mode)) {
+            // Path exists but is not a directory
+            fprintf(stderr, "DEBUG: Path exists but is not a directory\n");
+            switch (overwrite_mode) {
+                case OVERWRITE_ASK:
+                    if (!prompt_overwrite(final_path)) {
+                        PreflightFail preflight_fail = {"User declined directory overwrite"};
+                        write_preflight_fail(stream, &preflight_fail);
+                        fclose(stream);
+                        return -1;
+                    }
+                    break;
+                case OVERWRITE_NO:
+                case OVERWRITE_YES:
+                    break;
+            }
+            
+            // Remove existing non-directory
+            if (unlink(final_path) != 0) {
+                snprintf(error_buffer, sizeof(error_buffer), "Failed to remove existing file: %s", strerror(errno));
+                fprintf(stderr, "DEBUG: %s\n", error_buffer);
+                fclose(stream);
+                return -1;
+            }
+            
+            // Create the directory after removing file
+            if (mkdir(final_path, 0755) != 0) {
+                snprintf(error_buffer, sizeof(error_buffer), "Failed to create directory: %s", strerror(errno));
+                fprintf(stderr, "DEBUG: %s\n", error_buffer);
+                fclose(stream);
+                return -1;
+            }
+        } else {
+            fprintf(stderr, "DEBUG: Directory already exists, continuing\n");
+        }
+    } else {
+        fprintf(stderr, "DEBUG: Creating directory and parents\n");
+        // Create all parent directories
+        if (create_parent_directories(final_path) != 0) {
+            snprintf(error_buffer, sizeof(error_buffer), "Failed to create parent directories: %s", strerror(errno));
+            fprintf(stderr, "DEBUG: %s\n", error_buffer);
+            fclose(stream);
+            return -1;
+        }
+        
+        // Create the final directory
+        if (mkdir(final_path, 0755) != 0) {
+            snprintf(error_buffer, sizeof(error_buffer), "Failed to create directory: %s", strerror(errno));
+            fprintf(stderr, "DEBUG: %s\n", error_buffer);
+            fclose(stream);
+            return -1;
+        }
+        fprintf(stderr, "DEBUG: Successfully created directory\n");
+    }
+    
+    // Send success response for both new and existing directories
+    fprintf(stderr, "DEBUG: Sending PreflightOK\n");
     PreflightOk preflight_ok = {0};
-    write_preflight_ok(stream, &preflight_ok);
+    if (write_preflight_ok(stream, &preflight_ok) < 0) {
+        fprintf(stderr, "DEBUG: Failed to write PreflightOK\n");
+        fclose(stream);
+        return -1;
+    }
+    fflush(stream);  // Make sure PreflightOK is sent immediately
+    
+    fprintf(stderr, "DEBUG: Sending TransferResult\n");
+    TransferResult transfer_result = {1, 0};  // Success, no bytes transferred for directories
+    if (write_transfer_result(stream, &transfer_result) < 0) {
+        fprintf(stderr, "DEBUG: Failed to write TransferResult\n");
+        fclose(stream);
+        return -1;
+    }
+    fflush(stream);  // Make sure TransferResult is sent immediately
+    
+    fprintf(stderr, "DEBUG: Directory entry handled successfully\n");
     fclose(stream);
     return 0;
 }
@@ -385,9 +455,9 @@ static int handle_connection(Socket* sock, const char* dst_path, OverwriteMode o
         
         int result;
         if (file_meta.is_dir) {
-            result = handle_directory_entry(sock, final_path, overwrite_mode);
+            result = handle_directory_entry(sock, final_path, file_meta.overwrite_mode);
         } else {
-            result = handle_file_entry(sock, final_path, &file_meta, overwrite_mode);
+            result = handle_file_entry(sock, final_path, &file_meta, file_meta.overwrite_mode);
         }
         
         free(final_path);

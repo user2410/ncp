@@ -67,8 +67,11 @@ TEST(meta_roundtrip) {
         test_failure("Wrong message type");
     }
     
-    if (msg_len != 8 + 1 + 4 + 8) { // size + is_dir + name_len + name
-        test_failure("Wrong message length");
+    uint32_t expected_len = 8 + 1 + 1 + 4 + strlen(original.name); // size + is_dir + overwrite_mode + name_len + name
+    if (msg_len != expected_len) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Wrong message length: got %u, expected %u", msg_len, expected_len);
+        test_failure(buf);
     }
     
     FileMeta result = {0};

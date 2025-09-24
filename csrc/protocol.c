@@ -2,17 +2,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+
+#ifdef __APPLE__
+#include <libkern/OSByteOrder.h>
+#define my_htonll(x) OSSwapHostToBigInt64(x)
+#define my_ntohll(x) OSSwapBigToHostInt64(x)
+#else
 #include <arpa/inet.h>  // for htonl, ntohl
 
 // Helper functions for byte order conversion
-static uint64_t htonll(uint64_t x) {
+static uint64_t my_htonll(uint64_t x) {
     if (htonl(1) == 1) return x;  // If we're on a big-endian system
     return ((uint64_t)htonl(x & 0xFFFFFFFF) << 32) | htonl(x >> 32);
 }
 
-static uint64_t ntohll(uint64_t x) {
-    return htonll(x);  // Network to host is the same operation as host to network
+static uint64_t my_ntohll(uint64_t x) {
+    return my_htonll(x);  // Network to host is the same operation as host to network
 }
+#endif
 
 // Memory management functions
 void file_meta_free(FileMeta* meta) {
@@ -75,17 +82,19 @@ int write_meta(FILE* writer, const FileMeta* meta) {
     }
     
     uint32_t name_len = meta->name ? strlen(meta->name) : 0;
-    uint32_t len = 8 + 1 + 4 + name_len;
+    uint32_t len = 8 + 1 + 1 + 4 + name_len;  // size(8) + is_dir(1) + overwrite_mode(1) + name_len(4) + name
     uint32_t len_be = htonl(len);
     
     uint8_t type = MSG_META;
-    uint64_t size_be = htonll(meta->size);
+    uint64_t size_be = my_htonll(meta->size);
     uint8_t is_dir = meta->is_dir ? 1 : 0;
+    uint8_t overwrite = meta->overwrite_mode;
     
     if (fwrite(&type, 1, 1, writer) != 1) return -1;
     if (fwrite(&len_be, 4, 1, writer) != 1) return -1;
     if (fwrite(&size_be, 8, 1, writer) != 1) return -1;
     if (fwrite(&is_dir, 1, 1, writer) != 1) return -1;
+    if (fwrite(&overwrite, 1, 1, writer) != 1) return -1;
     if (write_string(writer, meta->name) != 0) return -1;
     
     fflush(writer);
@@ -100,12 +109,15 @@ int read_meta(FILE* reader, FileMeta* meta) {
     
     uint64_t size_be;
     uint8_t is_dir;
+    uint8_t overwrite;
     
     if (fread(&size_be, 8, 1, reader) != 1) return -1;
     if (fread(&is_dir, 1, 1, reader) != 1) return -1;
+    if (fread(&overwrite, 1, 1, reader) != 1) return -1;
     
-    meta->size = ntohll(size_be);
+    meta->size = my_ntohll(size_be);
     meta->is_dir = is_dir != 0;
+    meta->overwrite_mode = overwrite;
     
     if (read_string(reader, &meta->name) != 0) return -1;
     
@@ -118,15 +130,26 @@ int write_preflight_ok(FILE* writer, const PreflightOk* msg) {
         return -1;
     }
     
+    fprintf(stderr, "DEBUG: Protocol: Writing PreflightOK message\n");
     uint8_t type = MSG_PREFLIGHT_OK;
     uint32_t len = 8;
     uint32_t len_be = htonl(len);
-    uint64_t space_be = htonll(msg->available_space);
+    uint64_t space_be = my_htonll(msg->available_space);
     
-    if (fwrite(&type, 1, 1, writer) != 1) return -1;
-    if (fwrite(&len_be, 4, 1, writer) != 1) return -1;
-    if (fwrite(&space_be, 8, 1, writer) != 1) return -1;
+    if (fwrite(&type, 1, 1, writer) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to write type\n");
+        return -1;
+    }
+    if (fwrite(&len_be, 4, 1, writer) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to write length\n");
+        return -1;
+    }
+    if (fwrite(&space_be, 8, 1, writer) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to write space\n");
+        return -1;
+    }
     
+    fprintf(stderr, "DEBUG: Protocol: PreflightOK message written, flushing\n");
     fflush(writer);
     return 0;
 }
@@ -140,7 +163,7 @@ int read_preflight_ok(FILE* reader, PreflightOk* msg) {
     uint64_t space_be;
     if (fread(&space_be, 8, 1, reader) != 1) return -1;
     
-    msg->available_space = ntohll(space_be);
+    msg->available_space = my_ntohll(space_be);
     return 0;
 }
 
@@ -182,7 +205,7 @@ int write_transfer_start(FILE* writer, const TransferStart* msg) {
     uint8_t type = MSG_TRANSFER_START;
     uint32_t len = 8;
     uint32_t len_be = htonl(len);
-    uint64_t size_be = htonll(msg->file_size);
+    uint64_t size_be = my_htonll(msg->file_size);
     
     if (fwrite(&type, 1, 1, writer) != 1) return -1;
     if (fwrite(&len_be, 4, 1, writer) != 1) return -1;
@@ -201,7 +224,7 @@ int read_transfer_start(FILE* reader, TransferStart* msg) {
     uint64_t size_be;
     if (fread(&size_be, 8, 1, reader) != 1) return -1;
     
-    msg->file_size = ntohll(size_be);
+    msg->file_size = my_ntohll(size_be);
     return 0;
 }
 
@@ -215,7 +238,7 @@ int write_transfer_result(FILE* writer, const TransferResult* msg) {
     uint32_t len = 9;
     uint32_t len_be = htonl(len);
     uint8_t ok = msg->ok ? 1 : 0;
-    uint64_t bytes_be = htonll(msg->received_bytes);
+    uint64_t bytes_be = my_htonll(msg->received_bytes);
     
     if (fwrite(&type, 1, 1, writer) != 1) return -1;
     if (fwrite(&len_be, 4, 1, writer) != 1) return -1;
@@ -239,7 +262,7 @@ int read_transfer_result(FILE* reader, TransferResult* msg) {
     if (fread(&bytes_be, 8, 1, reader) != 1) return -1;
     
     msg->ok = ok != 0;
-    msg->received_bytes = ntohll(bytes_be);
+    msg->received_bytes = my_ntohll(bytes_be);
     return 0;
 }
 

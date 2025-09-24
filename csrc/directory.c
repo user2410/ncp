@@ -97,12 +97,12 @@ static int compare_entries(const void* a, const void* b) {
     const FileEntry* entry_a = (const FileEntry*)a;
     const FileEntry* entry_b = (const FileEntry*)b;
     
-    // Directories come first
+    // Directories before files
     if (entry_a->is_dir != entry_b->is_dir) {
-        return entry_b->is_dir - entry_a->is_dir;
+        return entry_b->is_dir - entry_a->is_dir;  // Directories first (like C++ implementation)
     }
     
-    // Then sort by relative path
+    // Sort by relative path
     return strcmp(entry_a->relative_path, entry_b->relative_path);
 }
 
@@ -149,30 +149,32 @@ static int walk_recursive(const char* root, const char* current_path, FileEntryA
             return -1;
         }
         
-        // Create and add entry
-        FileEntry file_entry = create_file_entry(
+        // Create and add entry (file or directory)
+        FileEntry new_entry = create_file_entry(
             full_path,
             rel_path,
             S_ISDIR(st.st_mode),
             S_ISREG(st.st_mode) ? st.st_size : 0
         );
         
-        free(rel_path);  // Already duplicated in create_file_entry
-        
-        if (!file_entry.path || !file_entry.relative_path ||
-            file_entry_array_add(array, file_entry) != 0) {
-            file_entry_free(&file_entry);
+        if (!new_entry.path || !new_entry.relative_path ||
+            file_entry_array_add(array, new_entry) != 0) {
+            file_entry_free(&new_entry);
+            free(rel_path);
             closedir(dir);
             return -1;
         }
         
-        // Recursively process directories
+        // If it's a directory, process its contents after adding it
         if (S_ISDIR(st.st_mode)) {
             if (walk_recursive(root, full_path, array) != 0) {
+                free(rel_path);
                 closedir(dir);
                 return -1;
             }
         }
+        
+        free(rel_path);  // Already duplicated in create_file_entry
     }
     
     closedir(dir);
@@ -188,17 +190,14 @@ FileEntryArray* walk_directory(const char* root) {
     // Create result array
     FileEntryArray* array = file_entry_array_new();
     if (!array) return NULL;
-    
-    // Add root directory entry
-    struct stat st;
-    if (stat(root, &st) == 0 && S_ISDIR(st.st_mode)) {
-        FileEntry root_entry = create_file_entry(root, ".", 1, 0);
-        if (!root_entry.path || !root_entry.relative_path ||
-            file_entry_array_add(array, root_entry) != 0) {
-            file_entry_free(&root_entry);
-            file_entry_array_free(array);
-            return NULL;
-        }
+
+    // Add root directory entry first
+    FileEntry root_entry = create_file_entry(root, ".", 1, 0);
+    if (!root_entry.path || !root_entry.relative_path ||
+        file_entry_array_add(array, root_entry) != 0) {
+        file_entry_free(&root_entry);
+        file_entry_array_free(array);
+        return NULL;
     }
     
     // Walk the directory tree
@@ -207,7 +206,7 @@ FileEntryArray* walk_directory(const char* root) {
         return NULL;
     }
     
-    // Sort entries
+    // Sort entries to ensure proper order (directories first, then files alphabetically)
     qsort(array->entries, array->count, sizeof(FileEntry), compare_entries);
     
     return array;
