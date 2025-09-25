@@ -4,6 +4,7 @@
 set -e
 
 echo "Building ncp..."
+make clean
 make ncp
 
 echo "Running unit tests..."

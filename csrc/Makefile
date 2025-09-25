@@ -35,6 +35,6 @@ test: $(TEST_TARGETS)
 	done
 
 clean:
-	rm -rf $(OBJ_DIR)/*.o $(TEST_TARGETS) ncp test_dir empty_dir
+	rm -rf $(OBJ_DIR)/*.o $(TEST_TARGETS) ncp test_dir empty_dir test_files received_files
 
 .PHONY: all test clean

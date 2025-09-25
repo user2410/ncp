@@ -58,6 +58,8 @@ int read_preflight_ok(FILE* reader, PreflightOk* msg);
 int read_preflight_fail(FILE* reader, PreflightFail* msg);
 int read_transfer_start(FILE* reader, TransferStart* msg);
 int read_transfer_result(FILE* reader, TransferResult* msg);
+int read_transfer_result_full(FILE* reader, TransferResult* msg);
+int read_transfer_result_payload(FILE* reader, TransferResult* msg);
 int read_message_type(FILE* reader, uint8_t* type);
 int read_message_length(FILE* reader, uint32_t* length);
 int read_exact_bytes(FILE* reader, uint8_t* buf, size_t len);

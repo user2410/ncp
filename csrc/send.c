@@ -154,20 +154,23 @@ static int send_file(Socket* sock, const char* path, OverwriteMode overwrite_mod
         }
     }
 
-    // Wait for transfer result
+    // Wait for transfer result (sent for both files and directories)
+    fprintf(stderr, "DEBUG: Send: Waiting for transfer result\n");
     TransferResult result;
-    if (read_transfer_result(sock_file, &result) < 0) {
-        fprintf(stderr, "Failed to read transfer result\n");
+    if (read_transfer_result_full(sock_file, &result) < 0) {
+        fprintf(stderr, "DEBUG: Send: Failed to read transfer result\n");
         fclose(sock_file);
         return -1;
     }
+    fprintf(stderr, "DEBUG: Send: Transfer result received: ok=%d, bytes=%llu\n", 
+            result.ok, (unsigned long long)result.received_bytes);
 
     // FileMeta takes ownership of entry_name
     fclose(sock_file);
     return result.ok ? 0 : -1;
 }
 
-static int send_directory_entry(Socket* sock, const FileEntry* entry, OverwriteMode overwrite_mode) {
+static int send_directory_entry(FILE* sock_file, Socket* sock, const FileEntry* entry, OverwriteMode overwrite_mode) {
     fprintf(stderr, "DEBUG: Sending entry: path=%s, is_dir=%d\n", 
             entry->relative_path, entry->is_dir);
             
@@ -184,27 +187,10 @@ static int send_directory_entry(Socket* sock, const FileEntry* entry, OverwriteM
         return -1;
     }
 
-    // Duplicate the file descriptor for the FILE* stream
-    int fd_dup = dup(sock->fd);
-    if (fd_dup < 0) {
-        fprintf(stderr, "Failed to duplicate socket descriptor: %s\n", strerror(errno));
-        free(meta.name);
-        return -1;
-    }
-
-    FILE* sock_file = fdopen(fd_dup, "w+b");  // Use w+b for bidirectional buffered I/O
-    if (!sock_file) {
-        fprintf(stderr, "Failed to create socket stream: %s\n", strerror(errno));
-        free(meta.name);
-        close(fd_dup);
-        return -1;
-    }
-
     // Send meta message and wait for preflight response
     if (write_meta(sock_file, &meta) < 0) {
         fprintf(stderr, "Failed to send metadata\n");
         free(meta.name);
-        fclose(sock_file);
         return -1;
     }
     fflush(sock_file);
@@ -215,13 +201,11 @@ static int send_directory_entry(Socket* sock, const FileEntry* entry, OverwriteM
     if (read_message_type(sock_file, &msg_type) < 0) {
         fprintf(stderr, "DEBUG: Failed to read preflight response type\n");
         free(meta.name);
-        fclose(sock_file);
         return -1;
     }
     if (read_message_length(sock_file, &msg_len) < 0) {
         fprintf(stderr, "DEBUG: Failed to read preflight response length\n");
         free(meta.name);
-        fclose(sock_file);
         return -1;
     }
     fprintf(stderr, "DEBUG: Got preflight response type: %d, length: %u\n", msg_type, msg_len);
@@ -239,7 +223,6 @@ static int send_directory_entry(Socket* sock, const FileEntry* entry, OverwriteM
                     errno, strerror(errno));
         }
         free(meta.name);
-        fclose(sock_file);
         return -1;
     }
 
@@ -247,9 +230,18 @@ static int send_directory_entry(Socket* sock, const FileEntry* entry, OverwriteM
     if (msg_type != MSG_PREFLIGHT_OK) {
         fprintf(stderr, "Unexpected preflight response: %d\n", msg_type);
         free(meta.name);
-        fclose(sock_file);
         return -1;
     }
+
+    // Read and consume the PreflightOK payload (available space)
+    PreflightOk preflight_ok;
+    if (read_preflight_ok(sock_file, &preflight_ok) < 0) {
+        fprintf(stderr, "DEBUG: Failed to read preflight OK payload\n");
+        free(meta.name);
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: PreflightOK received, available space: %llu\n", 
+            (unsigned long long)preflight_ok.available_space);
 
     // For files (not directories), send content
     if (!meta.is_dir) {
@@ -258,7 +250,6 @@ static int send_directory_entry(Socket* sock, const FileEntry* entry, OverwriteM
         if (write_transfer_start(sock_file, &start) < 0) {
             fprintf(stderr, "Failed to send transfer start\n");
             free(meta.name);
-            fclose(sock_file);
             return -1;
         }
         fflush(sock_file);
@@ -267,30 +258,27 @@ static int send_directory_entry(Socket* sock, const FileEntry* entry, OverwriteM
         if (send_file_content(sock, entry->path, entry->size) < 0) {
             fprintf(stderr, "Failed to send file content\n");
             free(meta.name);
-            fclose(sock_file);
             return -1;
         }
     }
 
-    // For files, we wait for transfer result
-    if (!meta.is_dir) {
-        TransferResult result;
-        if (read_transfer_result(sock_file, &result) < 0) {
-            fprintf(stderr, "Failed to read transfer result\n");
-            free(meta.name);
-            fclose(sock_file);
-            return -1;
-        }
-        if (!result.ok) {
-            fprintf(stderr, "Transfer failed\n");
-            free(meta.name);
-            fclose(sock_file);
-            return -1;
-        }
+    // Wait for transfer result (both files and directories send this)
+    fprintf(stderr, "DEBUG: Send: Waiting for transfer result\n");
+    TransferResult result;
+    if (read_transfer_result_full(sock_file, &result) < 0) {
+        fprintf(stderr, "DEBUG: Send: Failed to read transfer result\n");
+        free(meta.name);
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Send: Transfer result: ok=%d, bytes=%llu\n", 
+            result.ok, (unsigned long long)result.received_bytes);
+    if (!result.ok) {
+        fprintf(stderr, "Transfer failed\n");
+        free(meta.name);
+        return -1;
     }
 
     free(meta.name);
-    fclose(sock_file);
     return 0;
 }
 
@@ -303,25 +291,47 @@ static int send_directory(Socket* sock, const char* dir_path, OverwriteMode over
 
     printf("Directory contains %zu entries\n", entries->count);
 
+    // Create a single FILE stream for the entire directory transfer
+    int fd_dup = dup(sock->fd);
+    if (fd_dup < 0) {
+        fprintf(stderr, "Failed to duplicate socket descriptor: %s\n", strerror(errno));
+        file_entry_array_free(entries);
+        return -1;
+    }
+
+    FILE* sock_file = fdopen(fd_dup, "w+b");
+    if (!sock_file) {
+        fprintf(stderr, "Failed to create socket stream: %s\n", strerror(errno));
+        close(fd_dup);
+        file_entry_array_free(entries);
+        return -1;
+    }
+
+    // Disable buffering to ensure immediate writes/reads
+    if (setvbuf(sock_file, NULL, _IONBF, 0) != 0) {
+        fprintf(stderr, "Warning: Failed to disable buffering: %s\n", strerror(errno));
+    }
+    fprintf(stderr, "DEBUG: Send: Directory socket stream created with unbuffered I/O\n");
+
     int ret = 0;
     // Process all entries, including the root directory
     // They'll be in the right order (root dir first, then subdirs, then files)
     for (size_t i = 0; i < entries->count; i++) {
         FileEntry* entry = &entries->entries[i];
-        // Don't skip the root directory entry anymore
         
         printf("Transferring %s: %s\n", 
             entry->is_dir ? "directory" : "file",
             entry->relative_path);
 
-        // Send each file/directory using its relative path
-        if (send_directory_entry(sock, entry, overwrite_mode) < 0) {
+        // Send each file/directory using the shared stream
+        if (send_directory_entry(sock_file, sock, entry, overwrite_mode) < 0) {
             fprintf(stderr, "Failed to send '%s'\n", entry->path);
             ret = -1;
             break;
         }
     }
 
+    fclose(sock_file);
     file_entry_array_free(entries);
     return ret;
 }

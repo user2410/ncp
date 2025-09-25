@@ -166,26 +166,8 @@ static int create_parent_directories(const char* path) {
     return 0;
 }
 
-static int handle_directory_entry(Socket* sock, const char* final_path, OverwriteMode overwrite_mode) {
+static int handle_directory_entry(FILE* stream, const char* final_path, OverwriteMode overwrite_mode) {
     fprintf(stderr, "DEBUG: handle_directory_entry: path=%s\n", final_path);
-    
-    int fd_dup = dup(sock->fd);
-    if (fd_dup < 0) {
-        fprintf(stderr, "DEBUG: Failed to duplicate socket fd: %s\n", strerror(errno));
-        return -1;
-    }
-    
-    FILE* stream = fdopen(fd_dup, "wb+");
-    if (!stream) {
-        fprintf(stderr, "DEBUG: Failed to create stream: %s\n", strerror(errno));
-        close(fd_dup);
-        return -1;
-    }
-    
-    // Disable buffering on socket stream
-    if (setvbuf(stream, NULL, _IONBF, 0) != 0) {
-        fprintf(stderr, "Warning: Failed to disable buffering: %s\n", strerror(errno));
-    }
 
     struct stat st;
     if (stat(final_path, &st) == 0) {
@@ -198,7 +180,6 @@ static int handle_directory_entry(Socket* sock, const char* final_path, Overwrit
                     if (!prompt_overwrite(final_path)) {
                         PreflightFail preflight_fail = {"User declined directory overwrite"};
                         write_preflight_fail(stream, &preflight_fail);
-                        fclose(stream);
                         return -1;
                     }
                     break;
@@ -211,7 +192,6 @@ static int handle_directory_entry(Socket* sock, const char* final_path, Overwrit
             if (unlink(final_path) != 0) {
                 snprintf(error_buffer, sizeof(error_buffer), "Failed to remove existing file: %s", strerror(errno));
                 fprintf(stderr, "DEBUG: %s\n", error_buffer);
-                fclose(stream);
                 return -1;
             }
             
@@ -219,7 +199,6 @@ static int handle_directory_entry(Socket* sock, const char* final_path, Overwrit
             if (mkdir(final_path, 0755) != 0) {
                 snprintf(error_buffer, sizeof(error_buffer), "Failed to create directory: %s", strerror(errno));
                 fprintf(stderr, "DEBUG: %s\n", error_buffer);
-                fclose(stream);
                 return -1;
             }
         } else {
@@ -231,7 +210,6 @@ static int handle_directory_entry(Socket* sock, const char* final_path, Overwrit
         if (create_parent_directories(final_path) != 0) {
             snprintf(error_buffer, sizeof(error_buffer), "Failed to create parent directories: %s", strerror(errno));
             fprintf(stderr, "DEBUG: %s\n", error_buffer);
-            fclose(stream);
             return -1;
         }
         
@@ -239,7 +217,6 @@ static int handle_directory_entry(Socket* sock, const char* final_path, Overwrit
         if (mkdir(final_path, 0755) != 0) {
             snprintf(error_buffer, sizeof(error_buffer), "Failed to create directory: %s", strerror(errno));
             fprintf(stderr, "DEBUG: %s\n", error_buffer);
-            fclose(stream);
             return -1;
         }
         fprintf(stderr, "DEBUG: Successfully created directory\n");
@@ -250,29 +227,32 @@ static int handle_directory_entry(Socket* sock, const char* final_path, Overwrit
     PreflightOk preflight_ok = {0};
     if (write_preflight_ok(stream, &preflight_ok) < 0) {
         fprintf(stderr, "DEBUG: Failed to write PreflightOK\n");
-        fclose(stream);
         return -1;
     }
     fflush(stream);  // Make sure PreflightOK is sent immediately
     
-    fprintf(stderr, "DEBUG: Sending TransferResult\n");
+    fprintf(stderr, "DEBUG: Recv: About to send TransferResult for directory\n");
     TransferResult transfer_result = {1, 0};  // Success, no bytes transferred for directories
+    fprintf(stderr, "DEBUG: Recv: TransferResult struct: ok=%d, bytes=%llu\n", 
+            transfer_result.ok, (unsigned long long)transfer_result.received_bytes);
+    
     if (write_transfer_result(stream, &transfer_result) < 0) {
-        fprintf(stderr, "DEBUG: Failed to write TransferResult\n");
-        fclose(stream);
+        fprintf(stderr, "DEBUG: Recv: Failed to write TransferResult (errno: %d)\n", errno);
         return -1;
     }
-    fflush(stream);  // Make sure TransferResult is sent immediately
+    fprintf(stderr, "DEBUG: Recv: TransferResult write completed, additional flush\n");
+    if (fflush(stream) != 0) {
+        fprintf(stderr, "DEBUG: Recv: Failed to additional flush TransferResult (errno: %d)\n", errno);
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Recv: TransferResult sent and flushed completely\n");
     
     fprintf(stderr, "DEBUG: Directory entry handled successfully\n");
-    fclose(stream);
     return 0;
 }
 
-static int handle_file_entry(Socket* sock, const char* final_path, 
+static int handle_file_entry(FILE* stream, const char* final_path, 
                            const FileMeta* file_meta, OverwriteMode overwrite_mode) {
-    FILE* stream = fdopen(dup(sock->fd), "wb+");
-    if (!stream) return -1;
     
     struct stat st;
     if (stat(final_path, &st) == 0) {
@@ -281,14 +261,12 @@ static int handle_file_entry(Socket* sock, const char* final_path,
                 if (!prompt_overwrite(final_path)) {
                     PreflightFail preflight_fail = {"User declined overwrite"};
                     write_preflight_fail(stream, &preflight_fail);
-                    fclose(stream);
                     return -1;
                 }
                 break;
             case OVERWRITE_NO: {
                 PreflightFail preflight_fail = {"File exists, skipping"};
                 write_preflight_fail(stream, &preflight_fail);
-                fclose(stream);
                 return -1;
             }
             case OVERWRITE_YES:
@@ -299,7 +277,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
     // Create parent directory
     if (create_parent_directories(final_path) != 0) {
         snprintf(error_buffer, sizeof(error_buffer), "Failed to create parent directories: %s", strerror(errno));
-        fclose(stream);
         return -1;
     }
     
@@ -319,7 +296,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
         
         PreflightFail preflight_fail = {error_msg};
         write_preflight_fail(stream, &preflight_fail);
-        fclose(stream);
         return -1;
     }
     
@@ -330,7 +306,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
     uint8_t msg_type;
     if (read_message_type(stream, &msg_type) != 0 || msg_type != MSG_TRANSFER_START) {
         snprintf(error_buffer, sizeof(error_buffer), "Expected TransferStart message");
-        fclose(stream);
         return -1;
     }
     
@@ -344,7 +319,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
     size_t path_len = strlen(final_path);
     char* temp_path = malloc(path_len + 10); // +10 for ".ncp_temp\0"
     if (!temp_path) {
-        fclose(stream);
         return -1;
     }
     
@@ -354,7 +328,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
     if (!temp_file) {
         snprintf(error_buffer, sizeof(error_buffer), "Cannot create temporary file: %s", strerror(errno));
         free(temp_path);
-        fclose(stream);
         return -1;
     }
     
@@ -371,7 +344,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
             fclose(temp_file);
             unlink(temp_path);
             free(temp_path);
-            fclose(stream);
             return -1;
         }
         
@@ -379,7 +351,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
             fclose(temp_file);
             unlink(temp_path);
             free(temp_path);
-            fclose(stream);
             return -1;
         }
         
@@ -400,7 +371,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
         snprintf(error_buffer, sizeof(error_buffer), "Failed to rename temporary file: %s", strerror(errno));
         unlink(temp_path);
         free(temp_path);
-        fclose(stream);
         return -1;
     }
     
@@ -409,7 +379,6 @@ static int handle_file_entry(Socket* sock, const char* final_path,
     TransferResult transfer_result = {1, total_bytes};
     write_transfer_result(stream, &transfer_result);
     
-    fclose(stream);
     return 0;
 }
 
@@ -455,9 +424,9 @@ static int handle_connection(Socket* sock, const char* dst_path, OverwriteMode o
         
         int result;
         if (file_meta.is_dir) {
-            result = handle_directory_entry(sock, final_path, file_meta.overwrite_mode);
+            result = handle_directory_entry(stream, final_path, file_meta.overwrite_mode);
         } else {
-            result = handle_file_entry(sock, final_path, &file_meta, file_meta.overwrite_mode);
+            result = handle_file_entry(stream, final_path, &file_meta, file_meta.overwrite_mode);
         }
         
         free(final_path);

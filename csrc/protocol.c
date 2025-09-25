@@ -130,27 +130,35 @@ int write_preflight_ok(FILE* writer, const PreflightOk* msg) {
         return -1;
     }
     
-    fprintf(stderr, "DEBUG: Protocol: Writing PreflightOK message\n");
+    fprintf(stderr, "DEBUG: Protocol: Writing PreflightOK message (space=%llu)\n", 
+            (unsigned long long)msg->available_space);
     uint8_t type = MSG_PREFLIGHT_OK;
     uint32_t len = 8;
     uint32_t len_be = htonl(len);
     uint64_t space_be = my_htonll(msg->available_space);
     
+    fprintf(stderr, "DEBUG: Protocol: Writing type=%d, len=%u, space_be=0x%016llx\n", 
+            type, len, (unsigned long long)space_be);
+    
     if (fwrite(&type, 1, 1, writer) != 1) {
-        fprintf(stderr, "DEBUG: Protocol: Failed to write type\n");
+        fprintf(stderr, "DEBUG: Protocol: Failed to write type (errno: %d)\n", errno);
         return -1;
     }
     if (fwrite(&len_be, 4, 1, writer) != 1) {
-        fprintf(stderr, "DEBUG: Protocol: Failed to write length\n");
+        fprintf(stderr, "DEBUG: Protocol: Failed to write length (errno: %d)\n", errno);
         return -1;
     }
     if (fwrite(&space_be, 8, 1, writer) != 1) {
-        fprintf(stderr, "DEBUG: Protocol: Failed to write space\n");
+        fprintf(stderr, "DEBUG: Protocol: Failed to write space (errno: %d)\n", errno);
         return -1;
     }
     
     fprintf(stderr, "DEBUG: Protocol: PreflightOK message written, flushing\n");
-    fflush(writer);
+    if (fflush(writer) != 0) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to flush PreflightOK (errno: %d)\n", errno);
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Protocol: PreflightOK flushed successfully\n");
     return 0;
 }
 
@@ -234,36 +242,112 @@ int write_transfer_result(FILE* writer, const TransferResult* msg) {
         return -1;
     }
     
+    fprintf(stderr, "DEBUG: Protocol: Writing TransferResult message (ok=%d, bytes=%llu)\n", 
+            msg->ok, (unsigned long long)msg->received_bytes);
     uint8_t type = MSG_TRANSFER_RESULT;
     uint32_t len = 9;
     uint32_t len_be = htonl(len);
     uint8_t ok = msg->ok ? 1 : 0;
     uint64_t bytes_be = my_htonll(msg->received_bytes);
     
-    if (fwrite(&type, 1, 1, writer) != 1) return -1;
-    if (fwrite(&len_be, 4, 1, writer) != 1) return -1;
-    if (fwrite(&ok, 1, 1, writer) != 1) return -1;
-    if (fwrite(&bytes_be, 8, 1, writer) != 1) return -1;
+    fprintf(stderr, "DEBUG: Protocol: Writing type=%d, len=%u, ok=%d, bytes_be=0x%016llx\n", 
+            type, len, ok, (unsigned long long)bytes_be);
     
-    fflush(writer);
+    if (fwrite(&type, 1, 1, writer) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to write type (errno: %d)\n", errno);
+        return -1;
+    }
+    if (fwrite(&len_be, 4, 1, writer) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to write length (errno: %d)\n", errno);
+        return -1;
+    }
+    if (fwrite(&ok, 1, 1, writer) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to write ok flag (errno: %d)\n", errno);
+        return -1;
+    }
+    if (fwrite(&bytes_be, 8, 1, writer) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to write bytes (errno: %d)\n", errno);
+        return -1;
+    }
+    
+    fprintf(stderr, "DEBUG: Protocol: TransferResult written, flushing\n");
+    if (fflush(writer) != 0) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to flush TransferResult (errno: %d)\n", errno);
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Protocol: TransferResult flushed successfully\n");
     return 0;
 }
 
-int read_transfer_result(FILE* reader, TransferResult* msg) {
+// Helper function to read transfer result with full message handling
+int read_transfer_result_full(FILE* reader, TransferResult* msg) {
     if (!reader || !msg) {
         errno = EINVAL;
         return -1;
     }
     
+    fprintf(stderr, "DEBUG: Protocol: Reading TransferResult message (full)\n");
+    
+    uint8_t msg_type;
+    if (read_message_type(reader, &msg_type) != 0) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to read message type (errno: %d)\n", errno);
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Protocol: Read message type: %d\n", msg_type);
+    
+    if (msg_type != MSG_TRANSFER_RESULT) {
+        fprintf(stderr, "DEBUG: Protocol: Expected MSG_TRANSFER_RESULT (%d), got %d\n", 
+                MSG_TRANSFER_RESULT, msg_type);
+        errno = EPROTO;
+        return -1;
+    }
+    
+    uint32_t msg_len;
+    if (read_message_length(reader, &msg_len) != 0) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to read message length (errno: %d)\n", errno);
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Protocol: Read message length: %u\n", msg_len);
+    
+    return read_transfer_result_payload(reader, msg);
+}
+
+// Helper function to read just the payload part
+int read_transfer_result_payload(FILE* reader, TransferResult* msg) {
+    if (!reader || !msg) {
+        errno = EINVAL;
+        return -1;
+    }
+    
+    fprintf(stderr, "DEBUG: Protocol: Reading TransferResult payload\n");
     uint8_t ok;
     uint64_t bytes_be;
     
-    if (fread(&ok, 1, 1, reader) != 1) return -1;
-    if (fread(&bytes_be, 8, 1, reader) != 1) return -1;
+    // Read payload only - header should already be read by caller
+    if (fread(&ok, 1, 1, reader) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to read ok flag (errno: %d, ferror: %d, feof: %d)\n", 
+                errno, ferror(reader), feof(reader));
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Protocol: Read ok flag: %d\n", ok);
+    
+    if (fread(&bytes_be, 8, 1, reader) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to read bytes (errno: %d, ferror: %d, feof: %d)\n", 
+                errno, ferror(reader), feof(reader));
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Protocol: Read bytes value (raw: 0x%016llx)\n", 
+            (unsigned long long)bytes_be);
     
     msg->ok = ok != 0;
     msg->received_bytes = my_ntohll(bytes_be);
+    fprintf(stderr, "DEBUG: Protocol: TransferResult payload read successfully (ok=%d, bytes=%llu)\n",
+            msg->ok, (unsigned long long)msg->received_bytes);
     return 0;
+}
+
+int read_transfer_result(FILE* reader, TransferResult* msg) {
+    return read_transfer_result_payload(reader, msg);
 }
 
 int read_message_type(FILE* reader, uint8_t* type) {
@@ -272,7 +356,15 @@ int read_message_type(FILE* reader, uint8_t* type) {
         return -1;
     }
     
-    return fread(type, 1, 1, reader) == 1 ? 0 : -1;
+    fprintf(stderr, "DEBUG: Protocol: Reading message type\n");
+    size_t bytes_read = fread(type, 1, 1, reader);
+    if (bytes_read != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to read message type (bytes_read=%zu, errno=%d, ferror=%d, feof=%d)\n", 
+                bytes_read, errno, ferror(reader), feof(reader));
+        return -1;
+    }
+    fprintf(stderr, "DEBUG: Protocol: Read message type: %d\n", *type);
+    return 0;
 }
 
 int read_message_length(FILE* reader, uint32_t* length) {
@@ -281,10 +373,16 @@ int read_message_length(FILE* reader, uint32_t* length) {
         return -1;
     }
     
+    fprintf(stderr, "DEBUG: Protocol: Reading message length\n");
     uint32_t len_be;
-    if (fread(&len_be, 4, 1, reader) != 1) return -1;
+    if (fread(&len_be, 4, 1, reader) != 1) {
+        fprintf(stderr, "DEBUG: Protocol: Failed to read message length (errno=%d, ferror=%d, feof=%d)\n", 
+                errno, ferror(reader), feof(reader));
+        return -1;
+    }
     
     *length = ntohl(len_be);
+    fprintf(stderr, "DEBUG: Protocol: Read message length: %u (raw: 0x%08x)\n", *length, len_be);
     return 0;
 }
 
