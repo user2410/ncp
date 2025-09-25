@@ -111,8 +111,14 @@ static int send_file(Socket* sock, const char* path, OverwriteMode overwrite_mod
 
     // Wait for preflight response
     uint8_t msg_type;
+    uint32_t msg_len;
     if (read_message_type(sock_file, &msg_type) < 0) {
         fprintf(stderr, "Failed to read preflight response\n");
+        fclose(sock_file);
+        return -1;
+    }
+    if (read_message_length(sock_file, &msg_len) < 0) {
+        fprintf(stderr, "Failed to read preflight response length\n");
         fclose(sock_file);
         return -1;
     }
@@ -133,6 +139,14 @@ static int send_file(Socket* sock, const char* path, OverwriteMode overwrite_mod
     // Verify we got preflight OK
     if (msg_type != MSG_PREFLIGHT_OK) {
         fprintf(stderr, "Unexpected preflight response: %d\n", msg_type);
+        fclose(sock_file);
+        return -1;
+    }
+
+    // Read and consume the PreflightOK payload (available space)
+    PreflightOk preflight_ok;
+    if (read_preflight_ok(sock_file, &preflight_ok) < 0) {
+        fprintf(stderr, "Failed to read preflight OK payload\n");
         fclose(sock_file);
         return -1;
     }
