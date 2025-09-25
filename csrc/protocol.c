@@ -359,8 +359,12 @@ int read_message_type(FILE* reader, uint8_t* type) {
     fprintf(stderr, "DEBUG: Protocol: Reading message type\n");
     size_t bytes_read = fread(type, 1, 1, reader);
     if (bytes_read != 1) {
-        fprintf(stderr, "DEBUG: Protocol: Failed to read message type (bytes_read=%zu, errno=%d, ferror=%d, feof=%d)\n", 
-                bytes_read, errno, ferror(reader), feof(reader));
+        if (feof(reader)) {
+            fprintf(stderr, "DEBUG: Protocol: End of stream reached (connection closed)\n");
+        } else {
+            fprintf(stderr, "DEBUG: Protocol: Failed to read message type (bytes_read=%zu, errno=%d, ferror=%d, feof=%d)\n", 
+                    bytes_read, errno, ferror(reader), feof(reader));
+        }
         return -1;
     }
     fprintf(stderr, "DEBUG: Protocol: Read message type: %d\n", *type);

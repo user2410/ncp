@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L  // For strdup and other POSIX functions
 #include "../recv.h"
 #include <stdio.h>
 #include <stdlib.h>

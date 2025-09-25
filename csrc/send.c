@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L  // For strdup and other POSIX functions
 #include "send.h"
 #include "protocol.h"
 #include "directory.h"
