@@ -10,55 +10,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # build-rust:
-  #   runs-on: ${{ matrix.os }}
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       include:
-  #         # Linux
-  #         - os: ubuntu-24.04
-  #           target: x86_64-unknown-linux-gnu
-  #         - os: ubuntu-24.04-arm
-  #           target: aarch64-unknown-linux-gnu
-
-  #         # macOS
-  #         - os: macos-13
-  #           target: x86_64-apple-darwin
-  #         - os: macos-26
-  #           target: aarch64-apple-darwin
-
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-
-  #     - name: Extract crate information
-  #       shell: bash
-  #       run: |
-  #         echo "PROJECT_NAME=$(sed -n 's/^name = \"\(.*\)\"/\1/p' Cargo.toml | head -n1)" >> $GITHUB_ENV
-
-  #     - name: Install Rust
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         targets: ${{ matrix.target }}
-
-  #     - name: Build Rust
-  #       run: cargo build --release --target ${{ matrix.target }}
-
-  #     - name: Rename Rust artifact
-  #       shell: bash
-  #       run: |
-  #         mv target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }} \
-  #            target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}-${{ github.ref_name }}-rust-${{ matrix.target }}${{ matrix.extension }}
-
-  #     - name: Upload Rust artifact
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: ${{ env.PROJECT_NAME }}-${{matrix.os}}-${{ matrix.target }}-rust
-  #         path: target/${{ matrix.target }}/release/${{ env.PROJECT_NAME }}-${{ github.ref_name }}-rust-${{ matrix.target }}${{ matrix.extension }}
-
-  build-cpp:
-    if: contains(github.ref_name, 'minimal')
+  build-c:
+    if: contains(github.ref_name, '-minimal')
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     strategy:
@@ -71,8 +24,6 @@ jobs:
             container: alpine:latest
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-            container: alpine:latest
-
           # macOS (no container needed)
           - os: macos-13
             target: x86_64-apple-darwin
@@ -84,23 +35,26 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Extract project name (same as Rust crate name)
-        shell: bash
-        run: |
-          echo "PROJECT_NAME=$(sed -n 's/^name = \"\(.*\)\"/\1/p' Cargo.toml | head -n1)" >> $GITHUB_ENV
+        run: echo "PROJECT_NAME=$(sed -n 's/^name = \"\(.*\)\"/\1/p' Cargo.toml | head -n1)" >> $GITHUB_ENV
 
       - name: Install build dependencies
         run: |
-          if [[ "${{ matrix.target }}" == *"linux-musl"* ]]; then
-            apk add --no-cache build-base make
+          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
+            apk add --no-cache build-base make linux-headers
+          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y musl-tools make gcc
           fi
 
-      - name: Build C++ project
-        working-directory: cppsrc
+      - name: Build C project
+        working-directory: csrc
         run: |
-          if [[ "${{ matrix.target }}" == *"linux-musl"* ]]; then
-            make CC=gcc CXX=g++ CXXFLAGS="-std=c++17 -Wall -Wextra -Os -static -fno-rtti -ffunction-sections -fdata-sections -Wl,--gc-sections" ${{ env.PROJECT_NAME }}
+          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
+            make CC=gcc CFLAGS="-std=c17 -Wall -Wextra -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections" ${{ env.PROJECT_NAME }}
+          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+            make CC=musl-gcc CFLAGS="-std=c17 -Wall -Wextra -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections" ${{ env.PROJECT_NAME }}
           else
-            make ${{ env.PROJECT_NAME }}
+            make CC=clang CFLAGS="-std=c17 -Wall -Wextra -Os" ${{ env.PROJECT_NAME }}
           fi
           
           if [[ "${{ matrix.os }}" == "macos"* ]]; then
@@ -110,8 +64,7 @@ jobs:
           fi
       
       - name: Verify binary architecture and linking
-        working-directory: cppsrc
-        shell: bash
+        working-directory: csrc
         run: |
           BINARY="${{ env.PROJECT_NAME }}"
           FILE_BINARY=$(file "$BINARY")
@@ -123,14 +76,14 @@ jobs:
               echo "$FILE_BINARY" | grep -q 'statically linked' || { echo "Not statically linked!"; exit 1; }
               ;;
             aarch64-unknown-linux-musl)
-              echo "$FILE_BINARY" | grep -q 'aarch64\|arm64' || { echo "Architecture mismatch!"; exit 1; }
+              echo "$FILE_BINARY" | grep -q 'ARM\|aarch64\|arm64' || { echo "Architecture mismatch!"; exit 1; }
               echo "$FILE_BINARY" | grep -q 'statically linked' || { echo "Not statically linked!"; exit 1; }
               ;;
             x86_64-apple-darwin)
               echo "$FILE_BINARY" | grep -q 'x86-64\|x86_64' || { echo "Architecture mismatch!"; exit 1; }
               ;;
             arm64-apple-darwin)
-              echo "$FILE_BINARY" | grep -q 'arm64' || { echo "Architecture mismatch!"; exit 1; }
+              echo "$FILE_BINARY" | grep -q 'ARM\|aarch64\|arm64' || { echo "Architecture mismatch!"; exit 1; }
               ;;
             *)
               echo "Unknown architecture ${matrix.target}"
@@ -138,20 +91,20 @@ jobs:
               ;;
           esac
 
-      - name: Rename C++ artifact
+      - name: Rename C artifact
         run: |
-          cp cppsrc/${{ env.PROJECT_NAME }} \
-             cppsrc/${{ env.PROJECT_NAME }}-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.extension }}
+          cp csrc/${{ env.PROJECT_NAME }} \
+             csrc/${{ env.PROJECT_NAME }}-${{ matrix.target }}
 
-      - name: Upload C++ artifact
+      - name: Upload C artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PROJECT_NAME }}-${{matrix.os}}-${{ matrix.target }}-cpp
-          path: cppsrc/${{ env.PROJECT_NAME }}-${{ github.ref_name }}-${{ matrix.target }}${{ matrix.extension }}
+          name: ${{ env.PROJECT_NAME }}-${{ matrix.target }}
+          path: csrc/${{ env.PROJECT_NAME }}-${{ matrix.target }}
 
   release:
-    # needs: [build-rust, build-cpp]
-    needs: [build-cpp]
+    # needs: [build-rust, build-c]
+    needs: [build-c]
     runs-on: ubuntu-24.04
     steps:
       - name: Download artifacts
@@ -162,12 +115,7 @@ jobs:
 
       - name: Set release name
         run: |
-          TAG="${{ github.ref_name }}"
-          if [[ "$TAG" == "minimal" ]]; then
-            echo "RELEASE_NAME=Minimal Release" >> $GITHUB_ENV
-          else
-            echo "RELEASE_NAME=Release $TAG" >> $GITHUB_ENV
-          fi
+          echo "RELEASE_NAME=Release ${{ github.ref_name }}" >> $GITHUB_ENV
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -180,3 +128,16 @@ jobs:
           generate_release_notes: false
           name: ${{ env.RELEASE_NAME }}
           files: artifacts/**
+
+      - name: Create Latest GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          body: |
+            This release contains minimal version of ncp: no external dependencies, smallest possible binary.
+            Suitable for trusted network environments, such as internal network or VPN.
+            For more information, see [specs_minimal.md](specs/specs_minimal.md)
+          generate_release_notes: false
+          name: ${{ env.RELEASE_NAME }}
+          files: artifacts/**
+          overwrite_files: true

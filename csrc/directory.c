@@ -11,12 +11,8 @@
 #include <limits.h>
 #include <libgen.h>
 
-#ifdef __linux__
-#include <linux/limits.h>
-#endif
-
 #ifndef PATH_MAX
-#define PATH_MAX 4096
+#define PATH_MAX 1024
 #endif
 
 #define INITIAL_CAPACITY 16

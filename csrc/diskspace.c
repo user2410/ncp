@@ -4,12 +4,8 @@
 #include <errno.h>
 #include <limits.h>
 
-#ifdef _WIN32
-#define PATH_MAX MAX_PATH
-#elif defined(__APPLE__)
-// PATH_MAX is defined in <limits.h> on macOS
-#else
-#include <linux/limits.h>
+#ifndef PATH_MAX
+#define PATH_MAX 1024
 #endif
 
 #ifdef _WIN32
