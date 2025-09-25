@@ -4,6 +4,7 @@
 #include "directory.h"
 #include "recv.h"
 #include "socket_internal.h"
+#include "logging.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -102,16 +103,20 @@ static int send_file(Socket* sock, const char* path, OverwriteMode overwrite_mod
         return -1;
     }
 
+    DEBUG_LOG(2, "DEBUG: Send: About to send metadata\n");
     if (write_meta(sock_file, &meta) < 0) {
         fprintf(stderr, "Failed to send metadata\n");
         fclose(sock_file);
         return -1;
     }
+    DEBUG_LOG(2, "DEBUG: Send: Metadata sent, flushing\n");
     fflush(sock_file);
+    DEBUG_LOG(2, "DEBUG: Send: Metadata flushed, waiting for preflight response\n");
 
     // Wait for preflight response
     uint8_t msg_type;
     uint32_t msg_len;
+    DEBUG_LOG(2, "DEBUG: Send: About to read preflight response type\n");
     if (read_message_type(sock_file, &msg_type) < 0) {
         fprintf(stderr, "Failed to read preflight response\n");
         fclose(sock_file);
@@ -170,14 +175,14 @@ static int send_file(Socket* sock, const char* path, OverwriteMode overwrite_mod
     }
 
     // Wait for transfer result (sent for both files and directories)
-    fprintf(stderr, "DEBUG: Send: Waiting for transfer result\n");
+    DEBUG_LOG(2, "DEBUG: Send: Waiting for transfer result\n");
     TransferResult result;
     if (read_transfer_result_full(sock_file, &result) < 0) {
-        fprintf(stderr, "DEBUG: Send: Failed to read transfer result\n");
+        DEBUG_LOG(2, "DEBUG: Send: Failed to read transfer result\n");
         fclose(sock_file);
         return -1;
     }
-    fprintf(stderr, "DEBUG: Send: Transfer result received: ok=%d, bytes=%llu\n", 
+    DEBUG_LOG(2, "DEBUG: Send: Transfer result received: ok=%d, bytes=%llu\n", 
             result.ok, (unsigned long long)result.received_bytes);
 
     // FileMeta takes ownership of entry_name
@@ -186,7 +191,7 @@ static int send_file(Socket* sock, const char* path, OverwriteMode overwrite_mod
 }
 
 static int send_directory_entry(FILE* sock_file, Socket* sock, const FileEntry* entry, OverwriteMode overwrite_mode) {
-    fprintf(stderr, "DEBUG: Sending entry: path=%s, is_dir=%d\n", 
+    DEBUG_LOG(2, "DEBUG: Sending entry: path=%s, is_dir=%d\n", 
             entry->relative_path, entry->is_dir);
             
     // Send file metadata first
@@ -198,7 +203,7 @@ static int send_directory_entry(FILE* sock_file, Socket* sock, const FileEntry* 
     };
 
     if (!meta.name) {
-        fprintf(stderr, "Failed to allocate memory for entry name\n");
+        LOG_ERROR("Failed to allocate memory for entry name\n");
         return -1;
     }
 
@@ -214,27 +219,27 @@ static int send_directory_entry(FILE* sock_file, Socket* sock, const FileEntry* 
     uint8_t msg_type;
     uint32_t msg_len;
     if (read_message_type(sock_file, &msg_type) < 0) {
-        fprintf(stderr, "DEBUG: Failed to read preflight response type\n");
+        DEBUG_LOG(2, "DEBUG: Failed to read preflight response type\n");
         free(meta.name);
         return -1;
     }
     if (read_message_length(sock_file, &msg_len) < 0) {
-        fprintf(stderr, "DEBUG: Failed to read preflight response length\n");
+        DEBUG_LOG(2, "DEBUG: Failed to read preflight response length\n");
         free(meta.name);
         return -1;
     }
-    fprintf(stderr, "DEBUG: Got preflight response type: %d, length: %u\n", msg_type, msg_len);
+    DEBUG_LOG(2, "DEBUG: Got preflight response type: %d, length: %u\n", msg_type, msg_len);
 
     // Handle preflight failure
     if (msg_type == MSG_PREFLIGHT_FAIL) {
-        fprintf(stderr, "DEBUG: Handling preflight fail message\n");
+        DEBUG_LOG(2, "DEBUG: Handling preflight fail message\n");
         PreflightFail fail;
         memset(&fail, 0, sizeof(fail));
         if (read_preflight_fail(sock_file, &fail) == 0) {
             fprintf(stderr, "Transfer rejected: %s\n", fail.reason ? fail.reason : "No reason given");
             preflight_fail_free(&fail);
         } else {
-            fprintf(stderr, "DEBUG: Failed to read preflight failure details, errno=%d (%s)\n", 
+            DEBUG_LOG(2, "DEBUG: Failed to read preflight failure details, errno=%d (%s)\n", 
                     errno, strerror(errno));
         }
         free(meta.name);
@@ -251,11 +256,11 @@ static int send_directory_entry(FILE* sock_file, Socket* sock, const FileEntry* 
     // Read and consume the PreflightOK payload (available space)
     PreflightOk preflight_ok;
     if (read_preflight_ok(sock_file, &preflight_ok) < 0) {
-        fprintf(stderr, "DEBUG: Failed to read preflight OK payload\n");
+        DEBUG_LOG(2, "DEBUG: Failed to read preflight OK payload\n");
         free(meta.name);
         return -1;
     }
-    fprintf(stderr, "DEBUG: PreflightOK received, available space: %llu\n", 
+    DEBUG_LOG(2, "DEBUG: PreflightOK received, available space: %llu\n", 
             (unsigned long long)preflight_ok.available_space);
 
     // For files (not directories), send content
@@ -278,14 +283,14 @@ static int send_directory_entry(FILE* sock_file, Socket* sock, const FileEntry* 
     }
 
     // Wait for transfer result (both files and directories send this)
-    fprintf(stderr, "DEBUG: Send: Waiting for transfer result\n");
+    DEBUG_LOG(2, "DEBUG: Send: Waiting for transfer result\n");
     TransferResult result;
     if (read_transfer_result_full(sock_file, &result) < 0) {
-        fprintf(stderr, "DEBUG: Send: Failed to read transfer result\n");
+        DEBUG_LOG(2, "DEBUG: Send: Failed to read transfer result\n");
         free(meta.name);
         return -1;
     }
-    fprintf(stderr, "DEBUG: Send: Transfer result: ok=%d, bytes=%llu\n", 
+    DEBUG_LOG(2, "DEBUG: Send: Transfer result: ok=%d, bytes=%llu\n", 
             result.ok, (unsigned long long)result.received_bytes);
     if (!result.ok) {
         fprintf(stderr, "Transfer failed\n");
@@ -304,7 +309,7 @@ static int send_directory(Socket* sock, const char* dir_path, OverwriteMode over
         return -1;
     }
 
-    printf("Directory contains %zu entries\n", entries->count);
+    LOG_OUTPUT("Directory contains %zu entries\n", entries->count);
 
     // Create a single FILE stream for the entire directory transfer
     int fd_dup = dup(sock->fd);
@@ -326,7 +331,7 @@ static int send_directory(Socket* sock, const char* dir_path, OverwriteMode over
     if (setvbuf(sock_file, NULL, _IONBF, 0) != 0) {
         fprintf(stderr, "Warning: Failed to disable buffering: %s\n", strerror(errno));
     }
-    fprintf(stderr, "DEBUG: Send: Directory socket stream created with unbuffered I/O\n");
+    DEBUG_LOG(2, "DEBUG: Send: Directory socket stream created with unbuffered I/O\n");
 
     int ret = 0;
     // Process all entries, including the root directory
@@ -334,7 +339,7 @@ static int send_directory(Socket* sock, const char* dir_path, OverwriteMode over
     for (size_t i = 0; i < entries->count; i++) {
         FileEntry* entry = &entries->entries[i];
         
-        printf("Transferring %s: %s\n", 
+        LOG_OUTPUT("Transferring %s: %s\n", 
             entry->is_dir ? "directory" : "file",
             entry->relative_path);
 
@@ -351,20 +356,20 @@ static int send_directory(Socket* sock, const char* dir_path, OverwriteMode over
     return ret;
 }
 
-void ncp_execute_send(const char* host, uint16_t port,
+int ncp_execute_send(const char* host, uint16_t port,
                     const char* src_path, uint32_t retries,
                     OverwriteMode overwrite_mode) {
     struct stat st;
     if (stat(src_path, &st) != 0) {
         fprintf(stderr, "Error: Source path '%s' does not exist\n", src_path);
-        exit(1);
+        return 1;
     }
 
     // Get the base name for the source path
     char* base_name = strdup(src_path);
     if (!base_name) {
         fprintf(stderr, "Failed to allocate memory for basename\n");
-        exit(1);
+        return 1;
     }
 
     // Create socket
@@ -372,7 +377,7 @@ void ncp_execute_send(const char* host, uint16_t port,
     if (sock_fd < 0) {
         perror("Failed to create socket");
         free(base_name);
-        exit(1);
+        return 1;
     }
 
     // Setup server address
@@ -384,7 +389,8 @@ void ncp_execute_send(const char* host, uint16_t port,
     if (inet_pton(AF_INET, host, &server_addr.sin_addr) <= 0) {
         fprintf(stderr, "Invalid address/Address not supported\n");
         close(sock_fd);
-        exit(1);
+        free(base_name);
+        return 1;
     }
 
     // Connect with retry logic
@@ -397,7 +403,8 @@ void ncp_execute_send(const char* host, uint16_t port,
         if (retry_count == retries) {
             perror("Connection failed");
             close(sock_fd);
-            exit(1);
+            free(base_name);
+            return 1;
         }
         
         fprintf(stderr, "Connection attempt %d failed, retrying...\n", retry_count + 1);
@@ -408,44 +415,43 @@ void ncp_execute_send(const char* host, uint16_t port,
     Socket* sock = socket_new(sock_fd);
     if (!sock) {
         close(sock_fd);
-        exit(1);
+        free(base_name);
+        return 1;
     }
 
+    int result = 0;
     if (S_ISDIR(st.st_mode)) {
         // Send just the directory contents without the root directory
         if (send_directory(sock, src_path, overwrite_mode) < 0) {
             fprintf(stderr, "Failed to send: %s\n", src_path);
-            socket_free(sock);
-            free(base_name);
-            exit(1);
+            result = 1;
         }
     } else {
         // For single files
         if (send_file(sock, src_path, overwrite_mode) < 0) {
             fprintf(stderr, "Failed to send: %s\n", src_path);
-            socket_free(sock);
-            free(base_name);
-            exit(1);
+            result = 1;
         }
     }
 
     free(base_name);
     socket_free(sock);
+    return result;
 }
 
-void ncp_execute_send_listen(uint16_t port, const char* src_path,
+int ncp_execute_send_listen(uint16_t port, const char* src_path,
                           OverwriteMode overwrite_mode) {
     struct stat st;
     if (stat(src_path, &st) != 0) {
         fprintf(stderr, "Error: Source path '%s' does not exist\n", src_path);
-        exit(1);
+        return 1;
     }
 
     // Create socket
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         perror("Failed to create socket");
-        exit(1);
+        return 1;
     }
 
     // Setup server address
@@ -460,24 +466,24 @@ void ncp_execute_send_listen(uint16_t port, const char* src_path,
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         perror("setsockopt failed");
         close(server_fd);
-        exit(1);
+        return 1;
     }
 
     // Bind
     if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
         perror("Bind failed");
         close(server_fd);
-        exit(1);
+        return 1;
     }
 
     // Listen
     if (listen(server_fd, 1) < 0) {
         perror("Listen failed");
         close(server_fd);
-        exit(1);
+        return 1;
     }
 
-    printf("Listening on port %d...\n", port);
+    LOG_OUTPUT("Listening on port %d...\n", port);
 
     // Accept connection
     struct sockaddr_in client_addr;
@@ -486,14 +492,14 @@ void ncp_execute_send_listen(uint16_t port, const char* src_path,
     if (client_sock < 0) {
         perror("Accept failed");
         close(server_fd);
-        exit(1);
+        return 1;
     }
 
     Socket* sock = socket_new(client_sock);
     if (!sock) {
         close(client_sock);
         close(server_fd);
-        exit(1);
+        return 1;
     }
 
     // Get the base name for the source path
@@ -502,31 +508,27 @@ void ncp_execute_send_listen(uint16_t port, const char* src_path,
         fprintf(stderr, "Failed to allocate memory for basename\n");
         socket_free(sock);
         close(server_fd);
-        exit(1);
+        return 1;
     }
 
+    int result = 0;
     if (S_ISDIR(st.st_mode)) {
-        printf("Sending directory: %s\n", src_path);
+        LOG_OUTPUT("Sending directory: %s\n", src_path);
         // Send just the directory contents without the root directory
         if (send_directory(sock, src_path, overwrite_mode) < 0) {
             fprintf(stderr, "Failed to send: %s\n", src_path);
-            socket_free(sock);
-            free(base_name);
-            close(server_fd);
-            exit(1);
+            result = 1;
         }
     } else {
-        printf("Sending file: %s\n", src_path);
+        LOG_OUTPUT("Sending file: %s\n", src_path);
         if (send_file(sock, src_path, overwrite_mode) < 0) {
             fprintf(stderr, "Failed to send: %s\n", src_path);
-            socket_free(sock);
-            free(base_name);
-            close(server_fd);
-            exit(1);
+            result = 1;
         }
     }
 
     free(base_name);
     socket_free(sock);
     close(server_fd);
+    return result;
 }

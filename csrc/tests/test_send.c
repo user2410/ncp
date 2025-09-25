@@ -36,18 +36,10 @@ static void test_source_validation(void) {
     remove_test_file(nonexistent);  // Ensure file doesn't exist
     
     // Test should fail because file doesn't exist
-    // We expect the program to exit, so we fork to test this
-    pid_t pid = fork();
-    if (pid == 0) {
-        // Child process
-        ncp_execute_send("127.0.0.1", 9999, nonexistent, 1, OVERWRITE_YES);
-        exit(0);  // Should not reach here
-    } else {
-        // Parent process
-        int status;
-        waitpid(pid, &status, 0);
-        assert(WEXITSTATUS(status) == 1);  // Should exit with status 1
-    }
+    // Now that ncp_execute_send returns an error code instead of exiting,
+    // we can test it directly
+    int result = ncp_execute_send("127.0.0.1", 9999, nonexistent, 1, OVERWRITE_YES);
+    assert(result == 1);  // Should return error code 1
     
     printf("PASS\n");
 }

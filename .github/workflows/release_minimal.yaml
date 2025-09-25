@@ -113,10 +113,19 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Set release name
-        run: |
-          echo "RELEASE_NAME=Release ${{ github.ref_name }}" >> $GITHUB_ENV
-
+      - name: Create Latest GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: minimal-latest
+          body: |
+            This release contains minimal version of ncp: no external dependencies, smallest possible binary.
+            Suitable for trusted network environments, such as internal network or VPN.
+            For more information, see [specs_minimal.md](specs/specs_minimal.md)
+          generate_release_notes: false
+          name: Latest minimal 
+          files: artifacts/**
+          overwrite_files: true
+      
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -126,18 +135,5 @@ jobs:
             Suitable for trusted network environments, such as internal network or VPN.
             For more information, see [specs_minimal.md](specs/specs_minimal.md)
           generate_release_notes: false
-          name: ${{ env.RELEASE_NAME }}
+          name: ${{ github.ref_name }}
           files: artifacts/**
-
-      - name: Create Latest GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          body: |
-            This release contains minimal version of ncp: no external dependencies, smallest possible binary.
-            Suitable for trusted network environments, such as internal network or VPN.
-            For more information, see [specs_minimal.md](specs/specs_minimal.md)
-          generate_release_notes: false
-          name: ${{ env.RELEASE_NAME }}
-          files: artifacts/**
-          overwrite_files: true

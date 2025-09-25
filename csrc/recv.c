@@ -2,6 +2,7 @@
 #include "recv.h"
 #include "protocol.h"
 #include "diskspace.h"
+#include "logging.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -143,8 +144,17 @@ static int create_parent_directories(const char* path) {
     if (last_slash) {
         *last_slash = '\0';
         
+        // If the parent directory path is empty or just "/", nothing to create
+        if (strlen(path_copy) == 0 || strcmp(path_copy, "/") == 0) {
+            free(path_copy);
+            return 0;
+        }
+        
         // Create all parent directories with mode 0755
         char* p = path_copy;
+        // Skip leading slash for absolute paths
+        if (*p == '/') p++;
+        
         while (*p) {
             if (*p == '/') {
                 *p = '\0';
@@ -167,14 +177,14 @@ static int create_parent_directories(const char* path) {
 }
 
 static int handle_directory_entry(FILE* stream, const char* final_path, OverwriteMode overwrite_mode) {
-    fprintf(stderr, "DEBUG: handle_directory_entry: path=%s\n", final_path);
+    DEBUG_LOG(2, "DEBUG: handle_directory_entry: path=%s\n", final_path);
 
     struct stat st;
     if (stat(final_path, &st) == 0) {
-        fprintf(stderr, "DEBUG: Path exists, mode=%o\n", st.st_mode & S_IFMT);
+        DEBUG_LOG(2, "DEBUG: Path exists, mode=%o\n", st.st_mode & S_IFMT);
         if (!S_ISDIR(st.st_mode)) {
             // Path exists but is not a directory
-            fprintf(stderr, "DEBUG: Path exists but is not a directory\n");
+            DEBUG_LOG(2, "DEBUG: Path exists but is not a directory\n");
             switch (overwrite_mode) {
                 case OVERWRITE_ASK:
                     if (!prompt_overwrite(final_path)) {
@@ -191,100 +201,115 @@ static int handle_directory_entry(FILE* stream, const char* final_path, Overwrit
             // Remove existing non-directory
             if (unlink(final_path) != 0) {
                 snprintf(error_buffer, sizeof(error_buffer), "Failed to remove existing file: %s", strerror(errno));
-                fprintf(stderr, "DEBUG: %s\n", error_buffer);
+                DEBUG_LOG(2, "DEBUG: %s\n", error_buffer);
                 return -1;
             }
             
             // Create the directory after removing file
             if (mkdir(final_path, 0755) != 0) {
                 snprintf(error_buffer, sizeof(error_buffer), "Failed to create directory: %s", strerror(errno));
-                fprintf(stderr, "DEBUG: %s\n", error_buffer);
+                DEBUG_LOG(2, "DEBUG: %s\n", error_buffer);
                 return -1;
             }
         } else {
-            fprintf(stderr, "DEBUG: Directory already exists, continuing\n");
+            DEBUG_LOG(2, "DEBUG: Directory already exists, continuing\n");
         }
     } else {
-        fprintf(stderr, "DEBUG: Creating directory and parents\n");
+        DEBUG_LOG(2, "DEBUG: Creating directory and parents\n");
         // Create all parent directories
         if (create_parent_directories(final_path) != 0) {
             snprintf(error_buffer, sizeof(error_buffer), "Failed to create parent directories: %s", strerror(errno));
-            fprintf(stderr, "DEBUG: %s\n", error_buffer);
+            DEBUG_LOG(2, "DEBUG: %s\n", error_buffer);
             return -1;
         }
         
         // Create the final directory
         if (mkdir(final_path, 0755) != 0) {
             snprintf(error_buffer, sizeof(error_buffer), "Failed to create directory: %s", strerror(errno));
-            fprintf(stderr, "DEBUG: %s\n", error_buffer);
+            DEBUG_LOG(2, "DEBUG: %s\n", error_buffer);
             return -1;
         }
-        fprintf(stderr, "DEBUG: Successfully created directory\n");
+        DEBUG_LOG(2, "DEBUG: Successfully created directory\n");
     }
     
     // Send success response for both new and existing directories
-    fprintf(stderr, "DEBUG: Sending PreflightOK\n");
+    DEBUG_LOG(2, "DEBUG: Sending PreflightOK\n");
     PreflightOk preflight_ok = {0};
     if (write_preflight_ok(stream, &preflight_ok) < 0) {
-        fprintf(stderr, "DEBUG: Failed to write PreflightOK\n");
+        DEBUG_LOG(2, "DEBUG: Failed to write PreflightOK\n");
         return -1;
     }
     fflush(stream);  // Make sure PreflightOK is sent immediately
     
-    fprintf(stderr, "DEBUG: Recv: About to send TransferResult for directory\n");
+    DEBUG_LOG(2, "DEBUG: Recv: About to send TransferResult for directory\n");
     TransferResult transfer_result = {1, 0};  // Success, no bytes transferred for directories
-    fprintf(stderr, "DEBUG: Recv: TransferResult struct: ok=%d, bytes=%llu\n", 
+    DEBUG_LOG(2, "DEBUG: Recv: TransferResult struct: ok=%d, bytes=%llu\n", 
             transfer_result.ok, (unsigned long long)transfer_result.received_bytes);
     
     if (write_transfer_result(stream, &transfer_result) < 0) {
-        fprintf(stderr, "DEBUG: Recv: Failed to write TransferResult (errno: %d)\n", errno);
+        DEBUG_LOG(2, "DEBUG: Recv: Failed to write TransferResult (errno: %d)\n", errno);
         return -1;
     }
-    fprintf(stderr, "DEBUG: Recv: TransferResult write completed, additional flush\n");
+    DEBUG_LOG(2, "DEBUG: Recv: TransferResult write completed, additional flush\n");
     if (fflush(stream) != 0) {
-        fprintf(stderr, "DEBUG: Recv: Failed to additional flush TransferResult (errno: %d)\n", errno);
+        DEBUG_LOG(2, "DEBUG: Recv: Failed to additional flush TransferResult (errno: %d)\n", errno);
         return -1;
     }
-    fprintf(stderr, "DEBUG: Recv: TransferResult sent and flushed completely\n");
+    DEBUG_LOG(2, "DEBUG: Recv: TransferResult sent and flushed completely\n");
     
-    fprintf(stderr, "DEBUG: Directory entry handled successfully\n");
+    DEBUG_LOG(2, "DEBUG: Directory entry handled successfully\n");
     return 0;
 }
 
 static int handle_file_entry(FILE* stream, const char* final_path, 
                            const FileMeta* file_meta, OverwriteMode overwrite_mode) {
+    DEBUG_LOG(2, "DEBUG: handle_file_entry: Starting for path=%s, size=%llu\n", 
+            final_path, (unsigned long long)file_meta->size);
     
     struct stat st;
     if (stat(final_path, &st) == 0) {
+        DEBUG_LOG(2, "DEBUG: handle_file_entry: File exists, overwrite_mode=%d\n", overwrite_mode);
         switch (overwrite_mode) {
             case OVERWRITE_ASK:
                 if (!prompt_overwrite(final_path)) {
+                    DEBUG_LOG(2, "DEBUG: handle_file_entry: User declined overwrite\n");
                     PreflightFail preflight_fail = {"User declined overwrite"};
                     write_preflight_fail(stream, &preflight_fail);
                     return -1;
                 }
                 break;
             case OVERWRITE_NO: {
+                DEBUG_LOG(2, "DEBUG: handle_file_entry: Overwrite disabled, file exists\n");
                 PreflightFail preflight_fail = {"File exists, skipping"};
                 write_preflight_fail(stream, &preflight_fail);
                 return -1;
             }
             case OVERWRITE_YES:
+                DEBUG_LOG(2, "DEBUG: handle_file_entry: Overwrite enabled\n");
                 break;
         }
+    } else {
+        DEBUG_LOG(2, "DEBUG: handle_file_entry: File doesn't exist, proceeding\n");
     }
     
     // Create parent directory
+    DEBUG_LOG(2, "DEBUG: handle_file_entry: Creating parent directories\n");
     if (create_parent_directories(final_path) != 0) {
+        DEBUG_LOG(2, "DEBUG: handle_file_entry: Failed to create parent directories: %s\n", strerror(errno));
         snprintf(error_buffer, sizeof(error_buffer), "Failed to create parent directories: %s", strerror(errno));
         return -1;
     }
+    DEBUG_LOG(2, "DEBUG: handle_file_entry: Parent directories created successfully\n");
     
     // Check disk space
+    DEBUG_LOG(2, "DEBUG: handle_file_entry: Checking disk space\n");
     uint64_t available_space = get_available_space(final_path);
     int has_enough_space = check_disk_space(final_path, file_meta->size);
+    DEBUG_LOG(2, "DEBUG: handle_file_entry: Available space: %llu, needed: %llu, has_enough: %d\n",
+            (unsigned long long)available_space, (unsigned long long)file_meta->size, has_enough_space);
     
     if (!has_enough_space) {
+        DEBUG_LOG(2, "DEBUG: handle_file_entry: Insufficient disk space\n");
         char available_str[32], needed_str[32];
         format_bytes(available_space, available_str, sizeof(available_str));
         format_bytes(file_meta->size, needed_str, sizeof(needed_str));
@@ -299,8 +324,16 @@ static int handle_file_entry(FILE* stream, const char* final_path,
         return -1;
     }
     
+    DEBUG_LOG(2, "DEBUG: handle_file_entry: Sending PreflightOK with available_space=%llu\n", 
+            (unsigned long long)available_space);
     PreflightOk preflight_ok = {available_space};
-    write_preflight_ok(stream, &preflight_ok);
+    if (write_preflight_ok(stream, &preflight_ok) < 0) {
+        DEBUG_LOG(2, "DEBUG: handle_file_entry: Failed to write PreflightOK\n");
+        return -1;
+    }
+    DEBUG_LOG(2, "DEBUG: handle_file_entry: PreflightOK written, flushing\n");
+    fflush(stream);  // Make sure PreflightOK is sent immediately
+    DEBUG_LOG(2, "DEBUG: handle_file_entry: PreflightOK flushed\n");
     
     // Read transfer start
     uint8_t msg_type;
@@ -416,18 +449,20 @@ static int handle_connection(Socket* sock, const char* dst_path, OverwriteMode o
             return -1;
         }
         
-        printf("Receiving %s: %s (%lu bytes) to %s\n",
+        LOG_OUTPUT("Receiving %s: %s (%lu bytes) to %s\n",
                file_meta.is_dir ? "directory" : "file",
                file_meta.name,
                (unsigned long)file_meta.size,
                final_path);
         
+        DEBUG_LOG(2, "DEBUG: Recv: About to handle %s entry\n", file_meta.is_dir ? "directory" : "file");
         int result;
         if (file_meta.is_dir) {
             result = handle_directory_entry(stream, final_path, file_meta.overwrite_mode);
         } else {
             result = handle_file_entry(stream, final_path, &file_meta, file_meta.overwrite_mode);
         }
+        DEBUG_LOG(2, "DEBUG: Recv: Handler returned result: %d\n", result);
         
         free(final_path);
         file_meta_free(&file_meta);

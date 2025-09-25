@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "send.h"
 #include "recv.h"
+#include "logging.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -242,9 +243,14 @@ static Args parse_args(int argc, char* argv[]) {
 int main(int argc, char* argv[]) {
     Args args = parse_args(argc, argv);
     
+    // Set global verbosity level
+    set_verbosity(args.verbose);
+    
     if (args.verbose >= 1) {
         fprintf(stderr, "[INFO] Starting ncp with verbosity level %d\n", args.verbose);
     }
+    
+    int result = 0;
     
     if (args.command_type == CMD_SEND) {
         if (args.verbose >= 2) {
@@ -258,9 +264,9 @@ int main(int argc, char* argv[]) {
         }
         
         if (args.listen) {
-            ncp_execute_send_listen(args.port, args.src_or_dst, args.overwrite);
+            result = ncp_execute_send_listen(args.port, args.src_or_dst, args.overwrite);
         } else {
-            ncp_execute_send(args.host, args.port, args.src_or_dst, args.retries, args.overwrite);
+            result = ncp_execute_send(args.host, args.port, args.src_or_dst, args.retries, args.overwrite);
         }
     } else {
         if (args.verbose >= 2) {
@@ -274,15 +280,15 @@ int main(int argc, char* argv[]) {
         }
         
         if (args.listen) {
-            recv_execute(args.host, args.port, args.src_or_dst, args.overwrite);
+            result = recv_execute(args.host, args.port, args.src_or_dst, args.overwrite);
         } else {
-            recv_execute_connect(args.host, args.port, args.src_or_dst, args.overwrite);
+            result = recv_execute_connect(args.host, args.port, args.src_or_dst, args.overwrite);
         }
     }
     
-    if (args.verbose >= 1) {
+    if (result == 0 && args.verbose >= 1) {
         fprintf(stderr, "[INFO] Operation completed successfully\n");
     }
     
-    return 0;
+    return result;
 }

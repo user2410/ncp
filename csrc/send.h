@@ -9,12 +9,12 @@ extern "C" {
 #endif
 
 // Execute sender in connect mode
-void ncp_execute_send(const char* host, uint16_t port,
+int ncp_execute_send(const char* host, uint16_t port,
                     const char* src_path, uint32_t retries,
                     OverwriteMode overwrite_mode);
 
 // Execute sender in listen mode
-void ncp_execute_send_listen(uint16_t port, const char* src_path,
+int ncp_execute_send_listen(uint16_t port, const char* src_path,
                           OverwriteMode overwrite_mode);
 
 #ifdef __cplusplus

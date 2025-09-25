@@ -6,7 +6,7 @@ OBJ_DIR = obj
 TEST_DIR = tests
 
 # Source files
-SOURCES = directory.c diskspace.c protocol.c recv.c send.c
+SOURCES = directory.c diskspace.c logging.c protocol.c recv.c send.c
 OBJECTS = $(addprefix $(OBJ_DIR)/, $(SOURCES:.c=.o))
 
 # Test files
