@@ -458,9 +458,9 @@ static int handle_connection(Socket* sock, const char* dst_path, OverwriteMode o
         DEBUG_LOG(2, "DEBUG: Recv: About to handle %s entry\n", file_meta.is_dir ? "directory" : "file");
         int result;
         if (file_meta.is_dir) {
-            result = handle_directory_entry(stream, final_path, file_meta.overwrite_mode);
+            result = handle_directory_entry(stream, final_path, overwrite_mode);
         } else {
-            result = handle_file_entry(stream, final_path, &file_meta, file_meta.overwrite_mode);
+            result = handle_file_entry(stream, final_path, &file_meta, overwrite_mode);
         }
         DEBUG_LOG(2, "DEBUG: Recv: Handler returned result: %d\n", result);
         
