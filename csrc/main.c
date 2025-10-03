@@ -23,6 +23,9 @@ typedef struct {
     
     // Send-specific args
     uint32_t retries;
+    
+    // Recv-specific args
+    uint32_t timeout;
 } Args;
 
 static void print_help(void) {
@@ -39,6 +42,7 @@ static void print_help(void) {
     printf("    --port <PORT>    Port number\n");
     printf("    --listen, -l     Listen mode (send and recv)\n");
     printf("    --retries <N>    Retry attempts (send only, default: 3)\n");
+    printf("    --timeout <N>    Connection timeout in seconds (listen mode, default: no timeout)\n");
     printf("    --overwrite <M>  Overwrite mode: ask, yes, no (default: ask)\n");
     printf("    -h, --help       Show this help\n");
 }
@@ -56,6 +60,7 @@ static Args parse_send_args(int argc, char* argv[], int start_idx) {
     args.command_type = CMD_SEND;
     args.retries = 3;  // Default value
     args.overwrite = OVERWRITE_ASK;  // Default value
+    args.timeout = 0;  // Default 0 = no timeout (listen indefinitely)
     int host_specified = 0;
     int src_specified = 0;
     
@@ -91,6 +96,18 @@ static Args parse_send_args(int argc, char* argv[], int start_idx) {
                 exit(1);
             }
             args.retries = (uint32_t)retries;
+        } else if (strcmp(argv[i], "--timeout") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "--timeout requires value\n");
+                exit(1);
+            }
+            char* endptr;
+            long timeout = strtol(argv[i], &endptr, 10);
+            if (*endptr != '\0' || timeout < 0) {
+                fprintf(stderr, "Invalid timeout value\n");
+                exit(1);
+            }
+            args.timeout = (uint32_t)timeout;
         } else if (strcmp(argv[i], "--overwrite") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "--overwrite requires value\n");
@@ -129,6 +146,7 @@ static Args parse_recv_args(int argc, char* argv[], int start_idx) {
     args.command_type = CMD_RECV;
     args.host = "0.0.0.0";  // Default value
     args.overwrite = OVERWRITE_ASK;  // Default value
+    args.timeout = 0;  // Default 0 = no timeout (listen indefinitely)
     int host_specified = 0;
     int dst_specified = 0;
     
@@ -152,6 +170,18 @@ static Args parse_recv_args(int argc, char* argv[], int start_idx) {
                 exit(1);
             }
             args.port = (uint16_t)port;
+        } else if (strcmp(argv[i], "--timeout") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "--timeout requires value\n");
+                exit(1);
+            }
+            char* endptr;
+            long timeout = strtol(argv[i], &endptr, 10);
+            if (*endptr != '\0' || timeout <= 0) {
+                fprintf(stderr, "Invalid timeout value\n");
+                exit(1);
+            }
+            args.timeout = (uint32_t)timeout;
         } else if (strcmp(argv[i], "--overwrite") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "--overwrite requires value\n");
@@ -221,6 +251,7 @@ static Args parse_args(int argc, char* argv[]) {
         args.host = send_args.host;
         args.port = send_args.port;
         args.retries = send_args.retries;
+        args.timeout = send_args.timeout;
         args.overwrite = send_args.overwrite;
         args.listen = send_args.listen;
         args.src_or_dst = send_args.src_or_dst;
@@ -231,6 +262,7 @@ static Args parse_args(int argc, char* argv[]) {
         args.port = recv_args.port;
         args.overwrite = recv_args.overwrite;
         args.listen = recv_args.listen;
+        args.timeout = recv_args.timeout;
         args.src_or_dst = recv_args.src_or_dst;
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[i]);
@@ -264,7 +296,7 @@ int main(int argc, char* argv[]) {
         }
         
         if (args.listen) {
-            result = ncp_execute_send_listen(args.port, args.src_or_dst, args.overwrite);
+            result = ncp_execute_send_listen(args.port, args.src_or_dst, args.overwrite, args.timeout);
         } else {
             result = ncp_execute_send(args.host, args.port, args.src_or_dst, args.retries, args.overwrite);
         }
@@ -280,7 +312,7 @@ int main(int argc, char* argv[]) {
         }
         
         if (args.listen) {
-            result = recv_execute(args.host, args.port, args.src_or_dst, args.overwrite);
+            result = recv_execute(args.host, args.port, args.src_or_dst, args.overwrite, args.timeout);
         } else {
             result = recv_execute_connect(args.host, args.port, args.src_or_dst, args.overwrite);
         }

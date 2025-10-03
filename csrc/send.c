@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/select.h>
 #include <errno.h>
 #include <fcntl.h>
 
@@ -440,7 +441,7 @@ int ncp_execute_send(const char* host, uint16_t port,
 }
 
 int ncp_execute_send_listen(uint16_t port, const char* src_path,
-                          OverwriteMode overwrite_mode) {
+                          OverwriteMode overwrite_mode, uint32_t timeout_seconds) {
     struct stat st;
     if (stat(src_path, &st) != 0) {
         fprintf(stderr, "Error: Source path '%s' does not exist\n", src_path);
@@ -485,10 +486,42 @@ int ncp_execute_send_listen(uint16_t port, const char* src_path,
 
     LOG_OUTPUT("Listening on port %d...\n", port);
 
-    // Accept connection
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
-    int client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+    int client_sock;
+    
+    if (timeout_seconds > 0) {
+        // Use select with timeout
+        fd_set read_fds;
+        struct timeval timeout;
+        timeout.tv_sec = timeout_seconds;
+        timeout.tv_usec = 0;
+        
+        FD_ZERO(&read_fds);
+        FD_SET(server_fd, &read_fds);
+        
+        LOG_INFO("[INFO] Waiting for connection (timeout: %u seconds)...\n", timeout_seconds);
+        int select_result = select(server_fd + 1, &read_fds, NULL, NULL, &timeout);
+        
+        if (select_result < 0) {
+            perror("Select failed");
+            close(server_fd);
+            return 1;
+        } else if (select_result == 0) {
+            // Timeout occurred
+            LOG_ERROR("Timeout: No connection received within %u seconds\n", timeout_seconds);
+            close(server_fd);
+            return 1;
+        }
+        
+        // Connection is ready, accept it
+        client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+    } else {
+        // No timeout - listen indefinitely
+        LOG_INFO("[INFO] Waiting for connection...\n");
+        client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+    }
+    
     if (client_sock < 0) {
         perror("Accept failed");
         close(server_fd);

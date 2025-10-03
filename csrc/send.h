@@ -15,7 +15,7 @@ int ncp_execute_send(const char* host, uint16_t port,
 
 // Execute sender in listen mode
 int ncp_execute_send_listen(uint16_t port, const char* src_path,
-                          OverwriteMode overwrite_mode);
+                          OverwriteMode overwrite_mode, uint32_t timeout_seconds);
 
 #ifdef __cplusplus
 }

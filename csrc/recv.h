@@ -32,7 +32,7 @@ int socket_read(Socket* sock, void* data, size_t size);
 
 // Execute receiver in listen mode
 int recv_execute(const char* host, uint16_t port, 
-                const char* dst_path, OverwriteMode overwrite_mode);
+                const char* dst_path, OverwriteMode overwrite_mode, uint32_t timeout_seconds);
 
 // Execute receiver in connect mode
 int recv_execute_connect(const char* host, uint16_t port,

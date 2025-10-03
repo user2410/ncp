@@ -20,6 +20,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/select.h>
 #endif
 
 #define BUFFER_SIZE 8192
@@ -478,7 +479,7 @@ static int handle_connection(Socket* sock, const char* dst_path, OverwriteMode o
 }
 
 int recv_execute(const char* host, uint16_t port, 
-                const char* dst_path, OverwriteMode overwrite_mode) {
+                const char* dst_path, OverwriteMode overwrite_mode, uint32_t timeout_seconds) {
 #ifdef _WIN32
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -531,7 +532,47 @@ int recv_execute(const char* host, uint16_t port,
     
     struct sockaddr_in client_addr = {0};
     socklen_t client_len = sizeof(client_addr);
-    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+    int client_fd;
+    
+    if (timeout_seconds > 0) {
+        // Use select with timeout
+        fd_set read_fds;
+        struct timeval timeout;
+        timeout.tv_sec = timeout_seconds;
+        timeout.tv_usec = 0;
+        
+        FD_ZERO(&read_fds);
+        FD_SET(server_fd, &read_fds);
+        
+        LOG_INFO("[INFO] Waiting for connection (timeout: %u seconds)...\n", timeout_seconds);
+        int select_result = select(server_fd + 1, &read_fds, NULL, NULL, &timeout);
+        
+        if (select_result < 0) {
+            snprintf(error_buffer, sizeof(error_buffer), "Select failed: %s", strerror(errno));
+#ifdef _WIN32
+            closesocket(server_fd);
+#else
+            close(server_fd);
+#endif
+            return -1;
+        } else if (select_result == 0) {
+            // Timeout occurred
+            LOG_ERROR("Timeout: No connection received within %u seconds\n", timeout_seconds);
+#ifdef _WIN32
+            closesocket(server_fd);
+#else
+            close(server_fd);
+#endif
+            return -1;
+        }
+        
+        // Connection is ready, accept it
+        client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+    } else {
+        // No timeout - listen indefinitely
+        LOG_INFO("[INFO] Waiting for connection...\n");
+        client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+    }
     
     if (client_fd < 0) {
         snprintf(error_buffer, sizeof(error_buffer), "Accept failed: %s", strerror(errno));
