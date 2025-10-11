@@ -7,6 +7,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 
 // Version will be injected at build time
 #ifndef VERSION
@@ -23,7 +26,7 @@
 
 typedef struct {
     uint8_t verbose;
-    enum { CMD_SEND, CMD_RECV } command_type;
+    enum { CMD_SEND, CMD_RECV, CMD_FIND_PORT } command_type;
     
     // Common args
     char* host;
@@ -37,6 +40,9 @@ typedef struct {
     
     // Recv-specific args
     uint32_t timeout;
+    
+    // Find port flag
+    int find_port;
 } Args;
 
 static void print_version(void) {
@@ -65,6 +71,36 @@ static void print_version(void) {
     );
 }
 
+// Find an unused port by binding to port 0
+static int find_unused_port(void) {
+    int sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock_fd < 0) {
+        return -1;
+    }
+    
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(0);  // Let OS assign port
+    
+    if (bind(sock_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sock_fd);
+        return -1;
+    }
+    
+    // Get the assigned port
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(sock_fd, (struct sockaddr*)&addr, &addr_len) < 0) {
+        close(sock_fd);
+        return -1;
+    }
+    
+    int port = ntohs(addr.sin_port);
+    close(sock_fd);
+    return port;
+}
+
 static void print_help(void) {
     printf("ncp %s - Minimal file transfer over TCP\n\n", VERSION);
     printf("USAGE:\n");
@@ -72,7 +108,8 @@ static void print_help(void) {
     printf("    ncp [-v|-vv] send --listen --port <PORT> [OPTIONS] <SRC>\n");
     printf("    ncp [-v|-vv] recv --port <PORT> [OPTIONS] <DST>\n");
     printf("    ncp [-v|-vv] recv --host <HOST> --port <PORT> [OPTIONS] <DST>\n");
-    printf("    ncp [-v|-vv] recv --listen --port <PORT> [OPTIONS] <DST>\n\n");
+    printf("    ncp [-v|-vv] recv --listen --port <PORT> [OPTIONS] <DST>\n");
+    printf("    ncp --find-port\n\n");
     printf("OPTIONS:\n");
     printf("    -v, -vv          Increase verbosity\n");
     printf("    --host <HOST>    Target/bind host (auto-enables connect mode for recv)\n");
@@ -81,6 +118,7 @@ static void print_help(void) {
     printf("    --retries <N>    Retry attempts (send only, default: 3)\n");
     printf("    --timeout <N>    Connection timeout in seconds (listen mode, default: no timeout)\n");
     printf("    --overwrite <M>  Overwrite mode: ask, yes, no (default: ask)\n");
+    printf("    --find-port      Find and output an unused port number\n");
     printf("    -h, --help       Show this help\n");
     printf("    --version        Show version information\n");
 }
@@ -275,10 +313,20 @@ static Args parse_args(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--version") == 0) {
             print_version();
             exit(0);
+        } else if (strcmp(argv[i], "--find-port") == 0) {
+            args.command_type = CMD_FIND_PORT;
+            args.find_port = 1;
+            i++;
+            break;  // No more arguments needed for find-port
         } else {
             break;
         }
         i++;
+    }
+    
+    // If find-port was specified, we don't need a command
+    if (args.find_port) {
+        return args;
     }
     
     if (i >= argc) {
@@ -325,7 +373,15 @@ int main(int argc, char* argv[]) {
     
     int result = 0;
     
-    if (args.command_type == CMD_SEND) {
+    if (args.command_type == CMD_FIND_PORT) {
+        int port = find_unused_port();
+        if (port < 0) {
+            fprintf(stderr, "Failed to find unused port\n");
+            return 1;
+        }
+        printf("%d\n", port);
+        return 0;
+    } else if (args.command_type == CMD_SEND) {
         if (args.verbose >= 2) {
             if (args.listen) {
                 fprintf(stderr, "[DEBUG] Executing send listen command: port %d -> %s\n",
