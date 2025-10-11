@@ -8,7 +8,18 @@
 #include <ctype.h>
 #include <errno.h>
 
-#define VERSION "0.1.0"
+// Version will be injected at build time
+#ifndef VERSION
+#define VERSION "minimal"
+#endif
+
+#ifndef BUILD_DATE
+#define BUILD_DATE __DATE__ " " __TIME__
+#endif
+
+#ifndef GIT_COMMIT
+#define GIT_COMMIT "unknown"
+#endif
 
 typedef struct {
     uint8_t verbose;
@@ -28,6 +39,32 @@ typedef struct {
     uint32_t timeout;
 } Args;
 
+static void print_version(void) {
+    printf("ncp %s\n", VERSION);
+    
+    // Convert underscores back to spaces for display
+    char build_date_display[64];
+    strncpy(build_date_display, BUILD_DATE, sizeof(build_date_display) - 1);
+    build_date_display[sizeof(build_date_display) - 1] = '\0';
+    
+    // Replace underscores with spaces for better readability
+    for (char* p = build_date_display; *p; p++) {
+        if (*p == '_') *p = ' ';
+    }
+    
+    printf("Built: %s\n", build_date_display);
+    printf("Commit: %s\n", GIT_COMMIT);
+    printf("Compiler: %s\n", 
+#ifdef __clang__
+        "clang " __clang_version__
+#elif defined(__GNUC__)
+        "gcc " __VERSION__
+#else
+        "unknown"
+#endif
+    );
+}
+
 static void print_help(void) {
     printf("ncp %s - Minimal file transfer over TCP\n\n", VERSION);
     printf("USAGE:\n");
@@ -45,6 +82,7 @@ static void print_help(void) {
     printf("    --timeout <N>    Connection timeout in seconds (listen mode, default: no timeout)\n");
     printf("    --overwrite <M>  Overwrite mode: ask, yes, no (default: ask)\n");
     printf("    -h, --help       Show this help\n");
+    printf("    --version        Show version information\n");
 }
 
 static OverwriteMode parse_overwrite_mode(const char* mode) {
@@ -233,6 +271,9 @@ static Args parse_args(int argc, char* argv[]) {
             args.verbose = 2;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_help();
+            exit(0);
+        } else if (strcmp(argv[i], "--version") == 0) {
+            print_version();
             exit(0);
         } else {
             break;

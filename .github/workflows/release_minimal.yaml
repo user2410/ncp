@@ -46,15 +46,42 @@ jobs:
             sudo apt-get install -y musl-tools make gcc
           fi
 
+      - name: Extract version information
+        id: version
+        run: |
+          # Extract version from tag or use git describe
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev-$(date +%Y%m%d)")
+          fi
+          GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+          BUILD_DATE=$(date -u +"%Y-%m-%d_%H:%M:%S_UTC")
+          
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "GIT_COMMIT=$GIT_COMMIT" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_OUTPUT
+          
+          echo "Building version: $VERSION"
+          echo "Git commit: $GIT_COMMIT"
+          echo "Build date: $BUILD_DATE"
+
       - name: Build C project
         working-directory: csrc
         run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          GIT_COMMIT="${{ steps.version.outputs.GIT_COMMIT }}"
+          BUILD_DATE="${{ steps.version.outputs.BUILD_DATE }}"
+          
           if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
-            make CC=gcc CFLAGS="-std=c17 -Wall -Wextra -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections" ${{ env.PROJECT_NAME }}
+            make CC=gcc CFLAGS="-std=c17 -Wall -Wextra -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections" \
+                 VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" BUILD_DATE="$BUILD_DATE" ${{ env.PROJECT_NAME }}
           elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
-            make CC=musl-gcc CFLAGS="-std=c17 -Wall -Wextra -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections" ${{ env.PROJECT_NAME }}
+            make CC=musl-gcc CFLAGS="-std=c17 -Wall -Wextra -Os -static -ffunction-sections -fdata-sections -Wl,--gc-sections" \
+                 VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" BUILD_DATE="$BUILD_DATE" ${{ env.PROJECT_NAME }}
           else
-            make CC=clang CFLAGS="-std=c17 -Wall -Wextra -Os" ${{ env.PROJECT_NAME }}
+            make CC=clang CFLAGS="-std=c17 -Wall -Wextra -Os" \
+                 VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" BUILD_DATE="$BUILD_DATE" ${{ env.PROJECT_NAME }}
           fi
           
           if [[ "${{ matrix.os }}" == "macos"* ]]; then

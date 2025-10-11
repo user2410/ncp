@@ -1,6 +1,14 @@
 CC = gcc
 CFLAGS = -std=c17 -Wall -Wextra -O2
 
+# Version information
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE ?= $(shell date -u +"%Y-%m-%d_%H:%M:%S_UTC")
+
+# Add version defines to CFLAGS (properly escaped)
+VERSION_CFLAGS = -DVERSION='"$(VERSION)"' -DGIT_COMMIT='"$(GIT_COMMIT)"' -DBUILD_DATE='"$(BUILD_DATE)"'
+
 # Directories
 OBJ_DIR = obj
 TEST_DIR = tests
@@ -17,10 +25,10 @@ TEST_TARGETS = $(TEST_SOURCES:$(TEST_DIR)/%.c=%)
 all: ncp $(TEST_TARGETS)
 
 ncp: main.c $(OBJECTS)
-	$(CC) $(CFLAGS) -I. -o $@ $^
+	$(CC) $(CFLAGS) $(VERSION_CFLAGS) -I. -o $@ $^
 
 $(TEST_TARGETS): %: $(TEST_DIR)/%.c $(OBJECTS)
-	$(CC) $(CFLAGS) -I. -o $@ $^
+	$(CC) $(CFLAGS) $(VERSION_CFLAGS) -I. -o $@ $^
 
 $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
