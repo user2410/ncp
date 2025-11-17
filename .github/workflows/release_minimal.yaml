@@ -40,10 +40,13 @@ jobs:
       - name: Install build dependencies
         run: |
           if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]]; then
-            apk add --no-cache build-base make linux-headers
+            apk add --no-cache build-base make linux-headers upx
           elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
             sudo apt-get update
-            sudo apt-get install -y musl-tools make gcc
+            sudo apt-get install -y musl-tools make gcc upx
+          # elif [[ "${{ matrix.target }}" == *-apple-darwin ]]; then
+          #   brew install upx
+          # Skip for MacOS as Mach-O binary compression is not officially supported
           fi
 
       - name: Extract version information
@@ -84,10 +87,12 @@ jobs:
                  VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" BUILD_DATE="$BUILD_DATE" ${{ env.PROJECT_NAME }}
           fi
           
+          # Reduce binary size
           if [[ "${{ matrix.os }}" == "macos"* ]]; then
             strip -x ${{ env.PROJECT_NAME }}
           else
-            strip ${{ env.PROJECT_NAME }}
+            strip --strip-all ${{ env.PROJECT_NAME }}
+            upx --best --lzma ${{ env.PROJECT_NAME }}
           fi
       
       - name: Verify binary architecture and linking
